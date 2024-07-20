@@ -4,29 +4,33 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 #
+# Extensive modification of VideoPose3D source code
+# by researchers at the Visual Computing Lab @ IIT
 
-import math
+import sys
 import torch
 import numpy as np
 
-def mpjpe(predicted, target, n_samples_oi=None, shapeMatch=True):
+sys.path.append('../')
+from agents.helper import BONE_CHILD_KPTS_IDXS, BONE_PARENT_KPTS_IDXS
+
+def mpjpe(predicted, target, ret_per_kpt=False):
     """
     Mean per-joint position error (i.e. mean Euclidean distance),
     often referred to as "Protocol #1" in many papers.
     """
-    assert (not shapeMatch or predicted.shape==target.shape), '{} vs. {}'.format(predicted.shape, target.shape) # (?,f,p,3)
-    if n_samples_oi is None:
-        return torch.mean(torch.linalg.norm(predicted - target, dim=-1))
-    else:
-        n_samples, n_frames, n_joints = predicted.shape[:3]
-        return torch.sum(torch.linalg.norm(predicted - target, dim=-1)) / (n_samples_oi*n_frames*n_joints)
+    #assert(predicted.shape==target.shape), '{} vs {}'.format(predicted.shape, target.shape) # (?,f,j,3)
+    pos_err = torch.linalg.norm(predicted - target, dim=-1)
+    if ret_per_kpt:
+        return torch.mean(pos_err), torch.mean(pos_err, dim=(0,1))
+    return torch.mean(pos_err)
     
 def weighted_mpjpe(predicted, target, w):
     """
     Weighted mean per-joint position error (i.e. mean Euclidean distance)
     """
-    assert predicted.shape == target.shape
-    assert w.shape[0] == predicted.shape[0]
+    #assert(predicted.shape == target.shape)
+    #assert(w.shape[0] == predicted.shape[0])
     return torch.mean(w * torch.linalg.norm(predicted - target, dim=-1))
 
 def p_mpjpe(predicted, target):
@@ -34,7 +38,7 @@ def p_mpjpe(predicted, target):
     Pose error: MPJPE after rigid alignment (scale, rotation, and translation),
     often referred to as "Protocol #2" in many papers.
     """
-    assert predicted.shape == target.shape # (?*f,p,3)
+    assert (predicted.shape == target.shape) # (?*f,j,3)
     
     muX = np.mean(target, axis=1, keepdims=True)
     muY = np.mean(predicted, axis=1, keepdims=True)
@@ -63,35 +67,36 @@ def p_mpjpe(predicted, target):
 
     a = tr * normX / normY # Scale
     t = muX - a*np.matmul(muY, R) # Translation
-    
+
     # Perform rigid transformation on the input
     predicted_aligned = a*np.matmul(predicted, R) + t
     
     # Return MPJPE
-    return np.mean(np.linalg.norm(predicted_aligned - target, axis=-1))
+    procrustes_err = np.linalg.norm(predicted_aligned - target, axis=-1) # (?*f,j)
+    return np.mean(procrustes_err), np.mean(procrustes_err, axis=0)
     
 def n_mpjpe(predicted, target):
     """
     Normalized MPJPE (scale only), adapted from:
     https://github.com/hrhodin/UnsupervisedGeometryAwareRepresentationLearning/blob/master/losses/poses.py
     """
-    assert predicted.shape == target.shape # (?,f,p,3)
+    assert (predicted.shape == target.shape), '{} vs. {}'.format(predicted.shape, target.shape) # (?,f,j,3)
     
     norm_predicted = torch.mean(torch.sum(predicted**2, dim=3, keepdim=True), dim=2, keepdim=True)
     norm_target = torch.mean(torch.sum(target*predicted, dim=3, keepdim=True), dim=2, keepdim=True)
     scale = norm_target / norm_predicted
-    return mpjpe(scale * predicted, target)
+    return mpjpe(scale * predicted, target, ret_per_kpt=True)
 
 def mean_velocity_error(predicted, target):
     """
     Mean per-joint velocity error (i.e. mean Euclidean distance of the 1st derivative)
     """
-    assert predicted.shape == target.shape # (?,f,p,3)
+    assert (predicted.shape == target.shape) # (?,f,j,3)
     
-    velocity_predicted = np.diff(predicted, axis=0)
-    velocity_target = np.diff(target, axis=0)
-    
-    return np.mean(np.linalg.norm(velocity_predicted - velocity_target, axis=-1))
+    velocity_predicted = np.diff(predicted, axis=0) # (f,j,3)
+    velocity_target = np.diff(target, axis=0)  # (f,j,3)
+    velocity_err = np.linalg.norm(velocity_predicted - velocity_target, axis=-1) # (f,j)
+    return np.mean(velocity_err), np.mean(velocity_err, axis=0)
 
 
 def torch_p_mpjpe(predicted, target, with_scale_align=False):
@@ -99,7 +104,7 @@ def torch_p_mpjpe(predicted, target, with_scale_align=False):
     Pose error: MPJPE after rigid alignment (scale, rotation, and translation),
     often referred to as "Protocol #2" in many papers.
     """
-    assert (predicted.shape == target.shape and len(predicted.shape) == 3) # (?*f,p,3)
+    #assert(predicted.shape == target.shape and len(predicted.shape) == 3) # (?*f,j,3)
     with torch.no_grad():
         muX = torch.mean(target, dim=1, keepdim=True)
         muY = torch.mean(predicted, dim=1, keepdim=True)
@@ -137,10 +142,50 @@ def torch_p_mpjpe(predicted, target, with_scale_align=False):
     # Return MPJPE
     return torch.linalg.norm(predicted_aligned - target, dim=-1)
 
-# def get_outlier_thresh(input_tensor, quantiles, dim=None, keepdim=False):
-#     per_dim_quantiles = torch.quantile(input_tensor.view(-1,17), quantiles, dim=dim, keepdim=keepdim)
-#     per_batch_iqr = per_dim_quantiles[1] - per_dim_quantiles[0] # IQR = Q3 - Q1
-#     upper_thresh = per_dim_quantiles[1] + 1.5*per_batch_iqr # Upper = Q3 + 1.5*IQR
-#     return torch.unsqueeze(upper_thresh, dim=1)
+
+def mpboe(predicted, target, fb_obj, qset_kpt_idxs, v2o_bone_idxs,
+          fb_oi_indexes=None, swap_01_axes=True, ret_fb_dist=False, ret_per_kpt=True):
+    if swap_01_axes:
+        predicted = torch.swapaxes(predicted, 0, 1) # (?,f,j,3) or (f,?,j,3)
+        target = torch.swapaxes(target, 0, 1) # (?,f,j,3) or (f,?,j,3)
+
+    # compute target poses' bone lengths
+    target_dist = target[:,:,BONE_CHILD_KPTS_IDXS] - target[:,:,BONE_PARENT_KPTS_IDXS] # (?,f,b,3) or (f,?,b,3)
+    targ_bone_len = torch.linalg.norm(target_dist, dim=3, keepdim=True) # (?,f,b,1) or (f,?,b,1)
+    targ_bone_len = targ_bone_len[:,:,v2o_bone_idxs] # (?,f,b,1) or (f,?,b,1)
+    # compute poses' free bone unit-vector orientation
+    pred_fb_uvecs = fb_obj(predicted[:,:,qset_kpt_idxs,:]) # (?,f,b,3) or (f,?,b,3)
+    targ_fb_uvecs = fb_obj(target[:,:,qset_kpt_idxs,:]) # (?,f,b,3) or (f,?,b,3)
+    # scale free-bone unit vectors to target bone lengths
+    pred_fb_uvecs = targ_bone_len * pred_fb_uvecs
+    targ_fb_uvecs = targ_bone_len * targ_fb_uvecs
+    fb_uvecs_dist = torch.linalg.norm(pred_fb_uvecs - targ_fb_uvecs, dim=-1) # (?,f,b) or (f,?,b)
+
+    if ret_per_kpt:
+        if fb_oi_indexes is not None: fb_uvecs_dist = fb_uvecs_dist[:,:,fb_oi_indexes] # drop Face bone (ie. b=15)
+        return torch.mean(fb_uvecs_dist), torch.mean(fb_uvecs_dist, dim=(0,1)) # (?,f,b)->(1,), (b,) where b = 16 or 15
+    if ret_fb_dist: return fb_uvecs_dist # (?,f,b=16)
+    return torch.mean(fb_uvecs_dist) # (?,f,b=16) >> (1,)
 
 
+def j_mpboe(predicted, target, fb_obj, qset_kpt_idxs, v2o_bone_idxs,
+            joint_2_bone_mapping, kpt_2_idx, processor, fb_oi_indexes=None):
+    # first compute MPBOE
+    fb_uvecs_dist = mpboe(predicted, target, fb_obj, qset_kpt_idxs, v2o_bone_idxs,
+                          fb_oi_indexes, swap_01_axes=True, ret_fb_dist=True, ret_per_kpt=False)
+    drop_nose_kpt = fb_oi_indexes is not None
+
+    # propagate MPBOE to joints
+    nbsz, nfrm, nfbs = fb_uvecs_dist.shape # (?,f,b) or (f,?,b)
+    njnt = 16 if drop_nose_kpt else 17 # exclude 'Nse' kpt if drop_nose_kpt
+    jnt_mpbo_errs = torch.zeros((nbsz,nfrm,njnt), dtype=torch.float32, device=torch.device(processor)) # (?,f,j)
+
+    for jnt in joint_2_bone_mapping.keys():
+        if drop_nose_kpt and jnt=='Nse': continue
+        jnt_idx = kpt_2_idx[jnt]
+        fb_indexes, fb_kpt_wgt_contrib = joint_2_bone_mapping[jnt][0]
+
+        for idx, fb_idx in enumerate(fb_indexes):
+            assert (not drop_nose_kpt or fb_idx!=0), 'idx:{} fb_idx:{}'.format(idx, fb_idx) # drop_nose_kpt--> fb_idx is never 0 (0 is the index of UFace)
+            jnt_mpbo_errs[:,:,jnt_idx] += fb_uvecs_dist[:,:,fb_idx] * fb_kpt_wgt_contrib[idx] # (?,f) jnt_weighted_err_sum
+    return torch.mean(jnt_mpbo_errs), torch.mean(jnt_mpbo_errs, dim=(0,1)) # (?,f,j)->(1,), (j,)

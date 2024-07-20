@@ -43,10 +43,10 @@ def project_to_2d(X, camera_params):
     X -- 3D points in *camera space* to transform (N, *, 3)
     camera_params -- intrinsic parameteres (N, 2+2+3+2=9)
     """
-    assert X.shape[-1] == 3
-    assert len(camera_params.shape) == 2
-    assert camera_params.shape[-1] == 9
-    assert X.shape[0] == camera_params.shape[0]
+    #assert(X.shape[-1] == 3)
+    #assert(len(camera_params.shape) == 2)
+    #assert(camera_params.shape[-1] == 9)
+    #assert(X.shape[0] == camera_params.shape[0])
     
     while len(camera_params.shape) < len(X.shape):
         camera_params = camera_params.unsqueeze(1)
@@ -74,10 +74,10 @@ def project_to_2d_linear(X, camera_params):
     X -- 3D points in *camera space* to transform (N, *, 3)
     camera_params -- intrinsic parameteres (N, 2+2+3+2=9)
     """
-    assert X.shape[-1] == 3
-    assert len(camera_params.shape) == 2
-    assert camera_params.shape[-1] == 9
-    assert X.shape[0] == camera_params.shape[0]
+    #assert(X.shape[-1] == 3)
+    #assert(len(camera_params.shape) == 2)
+    #assert(camera_params.shape[-1] == 9)
+    #assert(X.shape[0] == camera_params.shape[0])
     
     while len(camera_params.shape) < len(X.shape):
         camera_params = camera_params.unsqueeze(1)

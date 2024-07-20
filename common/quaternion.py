@@ -7,16 +7,17 @@
 
 import torch
 
-def qrot(q, v):
+def qrot(q, v, debug=True):
     """
     Rotate vector(s) v about the rotation described by quaternion(s) q.
     Expects a tensor of shape (*, 4) for q and a tensor of shape (*, 3) for v,
     where * denotes any number of dimensions.
     Returns a tensor of shape (*, 3).
     """
-    assert q.shape[-1] == 4
-    assert v.shape[-1] == 3
-    assert q.shape[:-1] == v.shape[:-1]
+    if debug:
+        assert q.shape[-1] == 4
+        assert v.shape[-1] == 3
+        assert q.shape[:-1] == v.shape[:-1]
 
     qvec = q[..., 1:]
     uv = torch.cross(qvec, v, dim=len(q.shape)-1)

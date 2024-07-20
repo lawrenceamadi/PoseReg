@@ -1,4 +1,12 @@
-# File Added by Lawrence 03/24/2021
+# File Added by Lawrence 03/24/21; modified 07/20/24
+
+# Exact copy from VideoPose3D
+data/prepare_*
+data/*.m
+data/utils.py
+
+**/__pycache__/
+
 
 # User Defined Directories and Files
 *.npz
@@ -8,7 +16,7 @@
 *_old
 **/properties/
 experiments/
-checkpoint/
+#checkpoint/
 
 
 # These are some examples of commonly ignored file patterns.

@@ -3,22 +3,22 @@
 # @Author  : Lawrence A.
 # @Email   : lamadi@hawk.iit.edu
 # @File    : rbo_transform_tc.py
-# @Software: videopose3d
+# @Software: pose.reg
 
 import torch
 import torch.nn as nn
 import numpy as np
 
 from agents.helper import processor
-# processor = 'cpu'#"cpu"
-# if torch.cuda.is_available():
-#     processor = 'cuda'#"cuda:0"
 
 
 def to_numpy(torch_tensor):
-    return torch_tensor.detach().cpu().clone().numpy()
+    return torch_tensor.cpu().numpy()
 
-def guard_div(tensor_1, tensor_2, eps=1e-08):
+def torch_t(num, dtype=torch.float32, gradient=False):
+    return torch.tensor(num, dtype=dtype, device=torch.device(processor), requires_grad=gradient)
+
+def guard_div1(tensor_1, tensor_2):
     '''
     Protecting division is necessary to guard against division by 0.
     Particularly, when used to convert a vector to its unit-vector by dividing by the magnitude
@@ -29,22 +29,31 @@ def guard_div(tensor_1, tensor_2, eps=1e-08):
         tensor_2: denominator tensor
     Returns: tensor_1/tensor_2 with infinite and nan values replaced with 0
     '''
-    # #assert(tensor_1.dtype==torch.float32), 'tensor_1 dtype: {}'.format(tensor_1.dtype)
-    # #assert(tensor_2.dtype==torch.float32), 'tensor_2 dtype: {}'.format(tensor_2.dtype)
-    # division = torch.div(tensor_1, tensor_2)
-    # safe_div = torch.nan_to_num(division, nan=0.0)
-    safe_div = torch.div(tensor_1, tensor_2.clamp(min=eps))
-    return safe_div
+    #assert(tensor_1.dtype==torch.float32), 'tensor_1 dtype: {}'.format(tensor_1.dtype)
+    #assert(tensor_2.dtype==torch.float32), 'tensor_2 dtype: {}'.format(tensor_2.dtype)
+    division = torch.div(tensor_1, tensor_2)
+    return torch.nan_to_num(division, nan=0.0) # safe_div
+
+def guard_div2(tensor_1, tensor_2, eps=1e-08):
+    return torch.div(tensor_1, tensor_2.clamp(min=eps))
+
+def guard_div3(tensor_1, tensor_2, eps=1e-05):
+    return torch.div(tensor_1, (tensor_2 + eps))
 
 def guard_sqrt(tsr, eps=1e-08):
-    sqrt_clamped_tsr = torch.sqrt(tsr.clamp(min=eps))
-    return sqrt_clamped_tsr
+    return torch.sqrt(tsr.clamp(min=eps)) # sqrt_clamped_tsr
 
-def torch_t(num, dtype=torch.float32, gradient=False):
-    return torch.tensor(num, dtype=dtype, device=torch.device(processor), requires_grad=gradient)
+def torch_vecdot(a_vec_tensors, b_vec_tensors, keepdim=True, dim=-1):
+    # dot product of vectors in dim=2
+    # equivalent to np.dot(a_vec_tensors, b_vec_tensors)
+    return torch.sum(a_vec_tensors * b_vec_tensors, dim=dim, keepdim=keepdim)
 
-def torch_square(tensor):
-    return tensor*tensor
+def torch_matdot(mtx_tensor, vec_tensors, row_ax=-2, col_ax=-1):
+    # dot product between matrices in dim=2&3 and vectors in dim=3
+    # equivalent to np.dot(mtx_tensor, vec_tensors.T).T
+    # mtx_tensor-->(?,f,4,4)
+    # vec_tensor-->(?,f,n,4)
+    return torch.transpose(torch.matmul(mtx_tensor, torch.transpose(vec_tensors, col_ax, row_ax)), col_ax, row_ax)
 
 def are_valid_numbers(tensor):
     is_infinity = torch.isinf(tensor)
@@ -177,23 +186,40 @@ def are_translation_matrices(T, is_transposed=False):
     return are_translations
 
 def are_rotation_matrices(R, atol=1e-05):
-    # Checks if the matrices of R:(?,f,j,4,4) at last two axis are valid rotation matrices.
+    # Checks if the matrices of R:(?,f,j,4,4) at last two axis are orthogonal rotation matrices.
     #assert(R.ndim==5), 'R should be ?xfxjx4x4, but ndim=={}'.format(R.ndim)
-    assert(R.shape[3:]==(4,4)), 'Rotation should be 4x4 matrix, not {}'.format(R.shape[3:])
+    assert(R.shape[3:]==(3,3)), 'Rotation should be 4x4 matrix, not {}'.format(R.shape[3:])
     Rt = torch.transpose(R, 4, 3)
     shouldBeIdentity = torch.matmul(Rt, R)
-    identity_4x4 = torch.eye(4, dtype=torch.float32, device=torch.device(processor))
+    identity_4x4 = torch.eye(3, dtype=torch.float32, device=torch.device(processor)) # (3,3)
     are_identity = torch.isclose(shouldBeIdentity, identity_4x4, atol=atol) # was atol=1e-04
     all_are_identity = torch.all(are_identity)
     if not all_are_identity:
         are_identity = torch.all(torch.all(are_identity, dim=-1), dim=-1)
         are_not_identity = torch.flatten(torch.logical_not(are_identity))
-        not_identity_tsr = shouldBeIdentity.view((-1,4,4))[are_not_identity,:,:]
+        not_identity_tsr = shouldBeIdentity.view((-1,3,3))[are_not_identity,:,:]
         print('\n[Assert Warning] {:,} (or {:.2%}) of R^T and R matmul are not identity. Some values differ by more than {}'
               '\n\tTherefore the rotation matrices are not orthogonal and improper\n{}\n'.
               format(not_identity_tsr.shape[0], not_identity_tsr.shape[0]
                      / are_not_identity.shape[0], atol, not_identity_tsr))
     return all_are_identity
+
+def are_proper_rotation_matrices(R, nr_fb_idxs, atol=1e-05):
+    # Checks if the matrices of R:(?,f,j*,3,3) at last two axis are proper rotation matrices.
+    # When group_jmc is True, reflections are intended for Left body parts: (LHip,LThigh,LLeg,LShoulder,LBicep,LForearm)
+    # so exclude left body parts when (group_jmc=True) and test on right and central body parts
+    assert(R.shape[3:]==(3,3)), 'Rotation should be 3x3 matrix, not {}'.format(R.shape[3:])
+    shouldBePositiveOne = torch.linalg.det(R[:,:,nr_fb_idxs]) # (?,f,j')
+    are_positive_ones = torch.isclose(shouldBePositiveOne, torch_t(1.0), atol=atol) # (?,f,j')
+    all_are_positive_ones = torch.all(are_positive_ones) # (1.)
+    if not all_are_positive_ones:
+        are_not_positive_ones = torch.flatten(torch.logical_not(are_positive_ones)) # (?*f*j',)
+        not_positive_ones_tsr = shouldBePositiveOne.view(-1)[are_not_positive_ones] # (?')
+        print('\n[Assert Warning] {:,} (or {:.2%}) of det(R) are not 1 (up to +/-{}).\n\tAssuming the rotation matrices '
+              'have been confirmed orthogonal, then they must be improper, especially if det(R) = -1\n{}\n'.
+              format(not_positive_ones_tsr.shape[0], not_positive_ones_tsr.shape[0]
+                     / are_not_positive_ones.shape[0], atol, not_positive_ones_tsr))
+    return all_are_positive_ones
 
 def pivot_kpts_is_at_origin(pivot_aligned_kpts):
     pivot_at_origin = torch.all(torch.isclose(pivot_aligned_kpts, torch_t(0.)))
@@ -310,6 +336,19 @@ def plane_kpts_line_on_xyplane(plane_aligned_kpts, planar_4x4_matrix):
                      / kpts_are_not_on_xyplane.shape[0], kpts_not_on_xyplane_tsr))
     return all_kpts_are_on_xyplane
 
+def plane_pair_z_depth_are_same(plane_kpts1_z, plane_kpts2_z, atol=5e-05):
+    z_comp_are_equal = torch.isclose(plane_kpts1_z, plane_kpts2_z, atol=atol) # (?,f,t)
+    all_z_comp_are_equal = torch.all(z_comp_are_equal)
+    if not all_z_comp_are_equal:
+        z_comp_are_not_equal = torch.flatten(torch.logical_not(z_comp_are_equal)) # (?*f*t)
+        not_equal_z_comp_tsr = torch.stack((torch.flatten(plane_kpts1_z)[z_comp_are_not_equal], # (?*f*t,2)
+                                            torch.flatten(plane_kpts2_z)[z_comp_are_not_equal]), dim=-1)
+        print('\n[Assert Warning] {:,} (or {:.2%}) plane keypoint pairs do not have the same z-depth component'
+              '\n        after alignment and are therefore not equally displaced from the XY-plane:\n{}\n'.
+              format(not_equal_z_comp_tsr.shape[0], not_equal_z_comp_tsr.shape[0]
+                     / z_comp_are_not_equal.shape[0], not_equal_z_comp_tsr))
+    return all_z_comp_are_equal
+
 def likelihoods_are_non_negative(likelihood_tsr, log_spread=None):
     if log_spread is not None:
         assert(log_spread>=0), 'log_spread:{} must be >=0'.format(log_spread)
@@ -326,99 +365,12 @@ def likelihoods_are_non_negative(likelihood_tsr, log_spread=None):
     return all_log_inputs_are_positive
 
 
-def torch_atan2(numerator_tensor, denominator_tensor):
-    '''
-    arctan2 function is a piece-wise arctan function and is only differentiable
-    when (n)numerator!=0 or (d)denominator>0 see https://en.wikipedia.org/wiki/Atan2
-    gradient when d>0 or n!=0
-      partial_derivative_wrt_d = -n / (d^2 + n^2)
-      partial_derivative_wrt_n =  d / (d^2 + n^2)
-    gradient when d==0 and n!=0
-      partial_derivative_wrt_d = partial_derivative_wrt_n = 0
-    gradient when d==0 and n==0
-      partial_derivative_wrt_d = partial_derivative_wrt_n = undefined (unless hard-reset to 0)
-    '''
-    # TODO: test assertions
-    #d_gt_zero = denominator_tensor > torch_t(1e-3) # d greater than 0
-    #n_not_zero = torch.logical_not(torch.abs(numerator_tensor) < torch_t(1e-3))
-    #assert#(torch.all(torch.logical_or(d_gt_zero, n_not_zero)))
-    atan2_nd = torch.atan2(numerator_tensor, denominator_tensor)
-    #atan2_nd = torch.where(torch.logical_not(torch.logical_or(d_gt_zero, n_not_zero)), torch_t(0), atan2_nd)
-    return atan2_nd
-
-
-def torch_cross(a_vec_tensors, b_vec_tensors, axis=-1):
-    # cross product of vectors in dim=2
-    # equivalent to np.cross(a_vec_tensors, b_vec_tensors)
-    # a_vec_tensor-->(?,f,3)
-    # b_vec_tensor-->(?,f,3)
-    cross_prod = torch.cross(a_vec_tensors, b_vec_tensors, dim=axis) # dim=2
-    # i_components = a_vec_tensors[:,:,1]*b_vec_tensors[:,:,2] - a_vec_tensors[:,:,2]*b_vec_tensors[:,:,1] # (?,f)
-    # j_components = a_vec_tensors[:,:,2]*b_vec_tensors[:,:,0] - a_vec_tensors[:,:,0]*b_vec_tensors[:,:,2] # (?,f)
-    # k_components = a_vec_tensors[:,:,0]*b_vec_tensors[:,:,1] - a_vec_tensors[:,:,1]*b_vec_tensors[:,:,0] # (?,f)
-    # cross_prod = torch.stack((i_components, j_components, k_components), dim=2) # (?,f,3)
-    return cross_prod
-
-def torch_vecdot(a_vec_tensors, b_vec_tensors, keepdim=False, ndims=3, vsize=3):
-    # dot product of vectors in dim=2
-    # equivalent to np.dot(a_vec_tensors, b_vec_tensors)
-    dot_prod_1 = torch.sum(a_vec_tensors * b_vec_tensors, dim=-1, keepdim=keepdim)
-    # if ndims==3:
-    #     # a_vec_tensor-->(?,f,3)
-    #     # b_vec_tensor-->(?,f,3)
-    #     dot_prod_2 = a_vec_tensors[:,:,0] * b_vec_tensors[:,:,0]
-    #     for v_comp_idx in range(1, vsize):
-    #         dot_prod_2 += a_vec_tensors[:,:,v_comp_idx] * b_vec_tensors[:,:,v_comp_idx]
-    # else: # ndims==4:
-    #     # a_vec_tensor-->(?,f,m,3)
-    #     # b_vec_tensor-->(?,f,n,3)
-    #     dot_prod_2 = a_vec_tensors[:,:,:,0] * b_vec_tensors[:,:,:,0] + \
-    #                     a_vec_tensors[:,:,:,1] * b_vec_tensors[:,:,:,1] + \
-    #                     a_vec_tensors[:,:,:,2] * b_vec_tensors[:,:,:,2] + \
-    #                     a_vec_tensors[:,:,:,3] * b_vec_tensors[:,:,:,3]
-    # assert (torch.equal(dot_prod_1, dot_prod_2)), 'dot_prod_1:\n{}\ndot_prod_2:\n{}'.format(dot_prod_1, dot_prod_2)
-    return dot_prod_1 # (?,f) or (?,f,n)
-
-def torch_matdot(mtx_tensor, vec_tensors, row_ax=-2, col_ax=-1):
-    # dot product between matrices in dim=2&3 and vectors in dim=3
-    # equivalent to np.dot(mtx_tensor, vec_tensors.T).T
-    # mtx_tensor-->(?,f,4,4)
-    # vec_tensor-->(?,f,n,4)
-    mat_dot = torch.transpose(torch.matmul(mtx_tensor, torch.transpose(vec_tensors, col_ax, row_ax)), col_ax, row_ax)
-    # row0_dot_prod = torch_vecdot(mtx_tensor[:,:,[0],:], vec_tensors, ndims=4, vsize=4) # (?,f,n)
-    # row1_dot_prod = torch_vecdot(mtx_tensor[:,:,[1],:], vec_tensors, ndims=4, vsize=4) # (?,f,n)
-    # row2_dot_prod = torch_vecdot(mtx_tensor[:,:,[2],:], vec_tensors, ndims=4, vsize=4) # (?,f,n)
-    # row3_dot_prod = torch_vecdot(mtx_tensor[:,:,[3],:], vec_tensors, ndims=4, vsize=4) # (?,f,n)
-    # mat_dot = torch.stack((row0_dot_prod, row1_dot_prod, row2_dot_prod, row3_dot_prod), dim=3) # (?,f,n,4)
-    return mat_dot
-
-def torch_matmul(a_mtx_tensor, b_mtx_tensor, n=3):
-    # matrix multiplication between two matrices
-    # equivalent to np.matmul(a_mtx_tensor, b_mtx_tensor)
-    # a_mtx_tensor-->(?,f,n,n)
-    # b_mtx_tensor-->(?,f,n,n)
-    mat_mul = torch.matmul(a_mtx_tensor, b_mtx_tensor)
-    # row_list, col_list = [], []
-    # for i in range(n):
-    #     for j in range(n):
-    #         mij_dot_prod = torch_vecdot(a_mtx_tensor[:,:,i,:], b_mtx_tensor[:,:,:,j], vsize=n) # (?,f)
-    #         col_list.append(mij_dot_prod)
-    #
-    #     col_tensor = torch.stack(col_list, dim=2) # (?,f,n)
-    #     row_list.append(col_tensor)
-    #     col_list.clear()
-    #
-    # mat_mul = torch.stack(row_list, dim=2) # (?,f,n,n)
-    # del row_list, col_list
-    return mat_mul
-
-
 class FreeBoneOrientation(nn.Module):
 
     def __init__(self, batch_size, xy_yx_axis_dirs=None, z_axis_ab_idxs=None, yx_axis_ab_idxs=None, xy_yx_idxs=None,
-                 quad_uvec_axes1=None, quad_uvec_axes2=None, plane_proj_mult=None, hflip_multiplier=None, n_frames=1,
-                 n_fb_joints=16, pivot_kpt_idx=0, xy_axis_kpt_idx=1, yx_plane_kpt_idx=2, free_kpt_idx=3, z_idx=2,
-                 rot_tfm_mode=0, ret_mode=0, invert_pose=False, validate_ops=False, **kwargs):
+                 quad_uvec_axes1=None, quad_uvec_axes2=None, plane_proj_mult=None, hflip_multiplier=None, nr_fb_idxs=None,
+                 n_frm=1, n_fbs=16, pivot_kpt_idx=0, xy_axis_kpt_idx=1, yx_plane_kpt_idx=2, free_kpt_idx=-1, z_idx=2,
+                 rot_tfm_mode=0, ret_mode=0, quintuple=False, invert_pose=False, validate_ops=False, **kwargs):
         super(FreeBoneOrientation, self).__init__(**kwargs)
 
         # for rotation matrix
@@ -440,174 +392,219 @@ class FreeBoneOrientation(nn.Module):
             self.quad_uvec_axes1 = quad_uvec_axes1 # (1,1,j,3)
             self.quad_uvec_axes2 = quad_uvec_axes2 # (1,1,j,3)
             self.plane_proj_mult = plane_proj_mult # (1,1,j,3)
-            self.hflip_multiplier = hflip_multiplier # (1,1,j,1,3)
-            #self.xy_idxs = xy_yx_idxs[0] # xy
+            self.hflip_multiplier = hflip_multiplier # (1,1,j,3)
             self.two_tsr = torch_t(2.)
             self.one_tsr = torch_t(1.)
             self.half_tsr = torch_t(0.5)
             self.zero_tsr = torch_t(0.0)
             self.epsilon_tsr = torch_t(1e-08)
 
-        self.n_frames = n_frames
-        self.n_fb_joints = n_fb_joints
+        self.n_fbs = n_fbs
         self.pivot_kpt_idx = pivot_kpt_idx
-        self.xy_axis_kpt_idx = xy_axis_kpt_idx
-        self.yx_plane_kpt_idx = yx_plane_kpt_idx
+        self.axis_kpt_idx = xy_axis_kpt_idx
+        self.plane_kpt_idx = yx_plane_kpt_idx
         self.free_kpt_idx = free_kpt_idx
-        #self.scale_up = torch_t(scale)
-        #self.scale_down = torch_t(1./scale)
         self.ret_mode = ret_mode
         self.rot_tfm_mode = rot_tfm_mode
         self.validate_ops = validate_ops
         self.invert_pose = invert_pose
+        self.nr_fb_idxs = nr_fb_idxs # (j*,)
+        self.qb = 4 #3
 
         self.oat_atol1 = 1e-05 if rot_tfm_mode==0 else 7.5e-05 # tolerance for on-axis-test
-        self.oat_atol2 = 1e-07 if rot_tfm_mode==0 else 9.5e-06 # tolerance for on-axis-test
+        self.oat_atol2 = 1e-06 if rot_tfm_mode==0 else 9.5e-06 # tolerance for on-axis-test
 
         self.invert_pose_mult = torch.reshape(torch_t([-1,-1,1]), (1,1,1,1,3))
-        self.jnt_idxs = np.arange(self.n_fb_joints) # (j,) do NOT remove, very necessary!
-        self.build_for_batch(batch_size)
+        self.jnt_idxs = np.arange(self.n_fbs) # (j,) do NOT remove, very necessary!
+        self.quintuple_kpts = quintuple
+        self.n_koi = 5 if self.quintuple_kpts and self.validate_ops else 4 # koi: keypoints of interest
+        self.pap_kpts_idxs = [self.pivot_kpt_idx,self.axis_kpt_idx, self.plane_kpt_idx]
+        if self.quintuple_kpts: self.pap_kpts_idxs.append(self.plane_kpt_idx+1)
+        self.build_for_batch(batch_size, n_frm)
 
-    def build_for_batch(self, batch_size):
+    def build_for_batch(self, batch_size, n_frames):
         # input_shape:(?,f,j,4,3)
-        self.batch_size = batch_size
-        # todo: time optimization. Instead of recreating constant tensors everytime batch_size changes,
-        #  create constant tensors once with initial self.batch_size,
-        #  then use 'bs' (batch size for each step) to slice tensor: ie self.zero_tsr_bxfx3[:bs]
+        self.n_bsz = batch_size
+        self.n_frm = n_frames
+
         if self.rot_tfm_mode==0: # for rotation matrix
-            self.zero_tsr_bxfx3 = torch.zeros((self.batch_size,self.n_frames,3),
-                                              dtype=torch.float32, device=torch.device(processor)) # (?,f,3)
-            self.zero_tsr_bxfxjx1 = torch.zeros((self.batch_size,self.n_frames,self.n_fb_joints,1),
-                                                dtype=torch.float32, device=torch.device(processor)) # (?,f,j,1)
-            self.zero_tsr_bxfxjx4 = torch.zeros((self.batch_size,self.n_frames,self.n_fb_joints,4),
-                                                dtype=torch.float32, device=torch.device(processor)) # (?,f,j,4)
-            self.zero_tsr_bxfxjx3x1 = torch.zeros((self.batch_size,self.n_frames,self.n_fb_joints,3,1),
-                                                  dtype=torch.float32, device=torch.device(processor)) # (?,f,j,3,1)
-            self.ones_tsr_bxfxjx4x1 = torch.ones((self.batch_size,self.n_frames,self.n_fb_joints,4,1),
-                                                 dtype=torch.float32, device=torch.device(processor)) # (?,f,j,4,1)
-            self.homg_tsr_bxfxjx1x4 = torch.tile(torch_t([[[[0,0,0,1]]]], dtype=torch.float32),
-                                                 dims=(self.batch_size,self.n_frames,self.n_fb_joints,1,1)) # (?,f,j,1,4)
-
-            identity_4x4 = torch.eye(4, dtype=torch.float32, device=torch.device(processor)) # (4,4)
-            self.identity_bxfxjx4x4 = \
-                torch.broadcast_to(identity_4x4, [self.batch_size,self.n_frames,self.n_fb_joints,4,4]) # (4,4)->(?,f,j,4,4)
-            assert (torch.all(torch.eq(self.identity_bxfxjx4x4, identity_4x4))), "{}".format(self.identity_bxfxjx4x4)
-
             if self.validate_ops:
-                self.axis_2x2_matrix = torch.zeros((self.batch_size,self.n_frames,self.n_fb_joints,2,2),
+                # self.ones_tsr_bxfxjxkx1 = torch.ones((self.n_bsz,self.n_frm,self.n_fbs,self.n_koi-1,1),
+                #                                      dtype=torch.float32, device=torch.device(processor)) # (?,f,j,3or4,1)
+                self.axis_2x2_matrix = torch.zeros((self.n_bsz,self.n_frm,self.n_fbs,2,2),
                                                    dtype=torch.float32, device=torch.device(processor)) # (?,f,j,4,4)
                 self.axis_2x2_matrix[:,:,self.jnt_idxs,0,self.xy_idxs] = self.xy_axis_dirs[0,0,:,0] #torch_t(1.)
-                self.axis_test_uvecs = torch.zeros((self.batch_size,self.n_frames,self.n_fb_joints,3),
+                self.axis_test_uvecs = torch.zeros((self.n_bsz,self.n_frm,self.n_fbs,3),
                                                    dtype=torch.float32, device=torch.device(processor)) # (?,f,j,3)
                 self.axis_test_uvecs[:,:,self.jnt_idxs,self.xy_idxs] = self.xy_axis_dirs[0,0,:,0]
 
         else: # rot_tfm_mode==1 for quaternion
-            self.quadrant_1st_axis_uvec = torch.tile(self.quad_uvec_axes1, dims=(self.batch_size,self.n_frames,1,1))  # (?,f,j,3)
-            self.quadrant_2nd_axis_uvec = torch.tile(self.quad_uvec_axes2, dims=(self.batch_size,self.n_frames,1,1))  # (?,f,j,3)
+            self.quadrant_1st_axis_uvec = torch.tile(self.quad_uvec_axes1, dims=(self.n_bsz,self.n_frm,1,1))  # (?,f,j,3)
+            self.quadrant_2nd_axis_uvec = torch.tile(self.quad_uvec_axes2, dims=(self.n_bsz,self.n_frm,1,1))  # (?,f,j,3)
             if self.validate_ops:
-                self.axis_2x2_matrix = torch.zeros((self.batch_size,self.n_frames,self.n_fb_joints,2,2),
+                self.axis_2x2_matrix = torch.zeros((self.n_bsz,self.n_frm,self.n_fbs,2,2),
                                                    dtype=torch.float32, device=torch.device(processor)) # (?,f,j,4,4)
                 self.axis_2x2_matrix[:,:,:,0,:] = self.quadrant_1st_axis_uvec[:,:,:,:2]
                 self.axis_test_uvecs = self.quadrant_1st_axis_uvec
 
         # Needed for tests and assertions
         if self.validate_ops:
-            self.planar_4x4_matrix = torch.zeros((self.batch_size,self.n_frames,self.n_fb_joints,4,4),
+            self.planar_4x4_matrix = torch.zeros((self.n_bsz,self.n_frm,self.n_fbs,4,4),
                                                 dtype=torch.float32, device=torch.device(processor)) # (?,f,j,4,4)
             self.planar_4x4_matrix[:,:,[0,1,3,3,3,3],[1,2,0,1,2,3]] = torch_t(1.)
-            #self.zero_tsr = torch_t(0.)
             self.pi_tsr = torch_t(np.pi)
 
     def forward(self, input_tensor, **kwargs):
-        if input_tensor.shape[0]!=self.batch_size: self.build_for_batch(input_tensor.shape[0])
+        if input_tensor.shape[:2]!=(self.n_bsz, self.n_frm):
+            self.build_for_batch(input_tensor.shape[0], input_tensor.shape[1])
         if self.invert_pose: input_tensor = input_tensor * self.invert_pose_mult
 
-        # Step 0: Translate quadruplet keypoints such that pivot is on origin
-        quadruplet_kpts = input_tensor - input_tensor[:,:,:,[self.pivot_kpt_idx],:3]
-        ##quadruplet_kpts = quadruplet_kpts / 1000
+        # Step 0: Translate quadruplet/quintuple keypoints such that rotation pivot is at origin
+        pivot_kpts = input_tensor[:,:,:,[self.pivot_kpt_idx],:3] # (?,f,j,1,3)
+        if self.quintuple_kpts:
+            rgt_pln2pvt_vec = input_tensor[:,:,:self.qb,0] - input_tensor[:,:,:self.qb,2] # (?,f,t,3) 2->0 : R->O
+            plane_pair_vec = input_tensor[:,:,:self.qb,3] - input_tensor[:,:,:self.qb,2] # (?,f,t,3) 2->3 : R->L
+            plane_pair_uvec = guard_div1(plane_pair_vec, torch.linalg.norm(plane_pair_vec, dim=-1, keepdim=True)) # (?,f,t,1)
+            rgt_pln2pvt_proj = torch_vecdot(rgt_pln2pvt_vec, plane_pair_uvec) * plane_pair_uvec # (?,f,t,3)
+            plane_displace_vec = rgt_pln2pvt_vec - rgt_pln2pvt_proj # (?,f,t,3)
+        else: plane_displace_vec = None
 
-        tfm_meta_1, tfm_meta_2, rot_quadruplet_kpts = self.rotation_alignment_func(quadruplet_kpts)
+        if self.quintuple_kpts and not self.validate_ops:
+            quadruplet_kpts = input_tensor[:,:,:,[0,1,2,-1],:3] - pivot_kpts # (?,f,j,4,3)
+        else: quadruplet_kpts = input_tensor - pivot_kpts # (?,f,j,4or5,3)
+
+        tfm_meta_1, tfm_meta_2, aligned_pap_kpts, aligned_fb_vecs = \
+            self.rotation_alignment_func(quadruplet_kpts, plane_displace_vec)
+
+        if self.validate_ops:
+            assert(are_valid_numbers(aligned_pap_kpts))
+            assert(pivot_kpts_is_at_origin(aligned_pap_kpts[:,:,:,0]))
+            assert(axis_kpts_lie_on_axis(aligned_pap_kpts[:,:,:,1], self.axis_test_uvecs,
+                                         self.axis_2x2_matrix, atol1=self.oat_atol1, atol2=self.oat_atol2))
+            if self.quintuple_kpts:
+                assert(plane_kpts_line_on_xyplane(aligned_pap_kpts[:,:,self.qb:,2], self.planar_4x4_matrix[:,:,self.qb:]))
+                assert(plane_pair_z_depth_are_same(aligned_pap_kpts[:,:,:self.qb,2,2], aligned_pap_kpts[:,:,:self.qb,3,2]))
+            else: assert(plane_kpts_line_on_xyplane(aligned_pap_kpts[:,:,:,2], self.planar_4x4_matrix))
+
+        if self.ret_mode==1: return aligned_fb_vecs # (?,f,j,3)
 
         # Compute free limb vectors
-        free_bone_vecs = rot_quadruplet_kpts[:,:,:,self.free_kpt_idx] # (?,f,j,3)
-        free_bone_uvecs = guard_div(free_bone_vecs, torch.linalg.norm(free_bone_vecs, dim=3, keepdim=True)) # (?,f,j,3)
+        free_bone_uvecs = guard_div1(aligned_fb_vecs, torch.linalg.norm(aligned_fb_vecs, dim=3, keepdim=True)) # (?,f,j,3)
+        if self.ret_mode==0: return free_bone_uvecs # (?,f,j,3)
 
-        if self.validate_ops:
-            assert(are_valid_numbers(rot_quadruplet_kpts) and are_valid_numbers(free_bone_uvecs))
-            assert(pivot_kpts_is_at_origin(rot_quadruplet_kpts[:,:,:,self.pivot_kpt_idx]))
-            assert(axis_kpts_lie_on_axis(rot_quadruplet_kpts[:,:,:,self.xy_axis_kpt_idx], self.axis_test_uvecs,
-                                         self.axis_2x2_matrix, atol1=self.oat_atol1, atol2=self.oat_atol2))
-            assert(plane_kpts_line_on_xyplane(rot_quadruplet_kpts[:,:,:,self.yx_plane_kpt_idx], self.planar_4x4_matrix))
+        # when self.ret_mode==-1 or -2
+        return to_numpy(pivot_kpts), to_numpy(tfm_meta_1), to_numpy(tfm_meta_2), to_numpy(free_bone_uvecs)
 
-        if self.ret_mode==-1:
-            return to_numpy(input_tensor[:,:,:,[self.pivot_kpt_idx],:3]), to_numpy(tfm_meta_1), \
-                   to_numpy(tfm_meta_2), to_numpy(free_bone_uvecs)
-        elif self.ret_mode==1:
-            return free_bone_uvecs, free_bone_vecs # (?,f,j,3)
-        return free_bone_uvecs # (?,f,j,3) # for ret_mode == 0
-
-    def quaternion_rotation(self, quadruplet_kpts):
-        # Step 1: Rotate to align Axis-kpt (or Axis-Bone) with the pre-configured X or Y axis
-        xy_axis_vecs = quadruplet_kpts[:,:,:,self.xy_axis_kpt_idx,:3] # (?,f,j,4,3)->(?,f,j,3)
-        # cos_thetas_1 = guard_div(torch_vecdot(xy_axis_vecs, self.quadrant_1st_axis_uvec, keepdim=True),
-        #                          torch.linalg.norm(xy_axis_vecs, dim=-1, keepdim=True)) # (?,f,j,1)
-        quat_vec1 = self.rotate_vecb2veca_quaternion(xy_axis_vecs, self.quadrant_1st_axis_uvec) # (?,f,j,4)
-        quad_kpts_1of2_align = self.quaternion_rotate_vecs(quadruplet_kpts, quat_vec1) # (?,f,j,4,3)
-
-        # Step 2: Rotate to align Plane-kpt (or Plane-Bone) with the pre-configured XY-plane quadrant
-        # todo: for better precision, instead of multiplying, create zero tensor and insert none zero components into tensor
-        proj_yx_plane_vecs = quad_kpts_1of2_align[:,:,:,self.yx_plane_kpt_idx,:3] * self.plane_proj_mult # (?,f,j,3)
-        # cos_thetas_2 = guard_div(torch_vecdot(proj_yx_plane_vecs, self.quadrant_2nd_axis_uvec, keepdim=True),
-        #                          torch.linalg.norm(proj_yx_plane_vecs, dim=-1, keepdim=True)) # (?,f,j,1)
-        quat_vec2 = self.rotate_vecb2veca_quaternion(proj_yx_plane_vecs, self.quadrant_2nd_axis_uvec,
-                                                     parallel_axis_uvec=self.quadrant_1st_axis_uvec) # (?,f,j,4)
-        quad_kpts_2of2_align = self.quaternion_rotate_vecs(quad_kpts_1of2_align, quat_vec2) # (?,f,j,4,3)
-
-        if self.validate_ops:
-            assert(kpts_are_on_axis_hemisphere(quad_kpts_2of2_align[:,:,:,self.yx_plane_kpt_idx], self.quadrant_2nd_axis_uvec))
-
-        quad_kpts_2of2_align = quad_kpts_2of2_align * self.hflip_multiplier # horizontal-flip for grouping symmetric fb-joints
-
-        return quat_vec1, quat_vec2, quad_kpts_2of2_align
-
-
-    def matrix_rotation(self, quadruplet_kpts):
-        quadruplet_kpts_hom = torch.cat([quadruplet_kpts, self.ones_tsr_bxfxjx4x1], dim=4) # (?,f,j,4,3)+(?,f,j,4,1)->(?,f,j,4,4)
-
+    def matrix_rotation(self, quadruplet_kpts, plane_displace_vecs):
         # Get limb vectors from pairs of keypoint positions
-        xy_axis_vecs = quadruplet_kpts[:,:,:,self.xy_axis_kpt_idx,:3] # (?,f,j,4,3)->(?,f,j,3)
-        yx_plane_vecs = quadruplet_kpts[:,:,:,self.yx_plane_kpt_idx,:3] # (?,f,j,4,3)->(?,f,j,3)
-        xyz_comparable_vecs = self.broadcast_indexed_list_assign(xy_axis_vecs, yx_plane_vecs) # (?,f,j,3,3)
+        xy_axis_vecs = quadruplet_kpts[:,:,:,self.axis_kpt_idx] # (?,f,j,4,3)->(?,f,j,3)
+        if self.quintuple_kpts:
+            yx_plane_vecs = torch.cat((quadruplet_kpts[:,:,:self.qb,self.plane_kpt_idx] + plane_displace_vecs,
+                                       quadruplet_kpts[:,:,self.qb:,self.plane_kpt_idx]), dim=2)
+        else: yx_plane_vecs = quadruplet_kpts[:,:,:,self.plane_kpt_idx] # (?,f,j,4,3)->(?,f,j,3)
+        xyz_comparable_vecs = self.broadcast_indexed_list_assign(xy_axis_vecs, yx_plane_vecs) # (?,f,j,2,3)
 
         # Define new x-axis, y-axis, and z-axis
-        xy_axis_uvecs = guard_div(xy_axis_vecs, torch.linalg.norm(xy_axis_vecs, dim=3, keepdim=True)) * self.xy_axis_dirs # (?,f,j,3)
+        xy_axis_uvecs = guard_div1(xy_axis_vecs, torch.linalg.norm(xy_axis_vecs, dim=3, keepdim=True)) * self.xy_axis_dirs # (?,f,j,3)
 
         z_axis_vecs = torch.cross(xyz_comparable_vecs[:,:,self.jnt_idxs,self.z_axis_a_idxs], # (?,f,j,3)
                                   xyz_comparable_vecs[:,:,self.jnt_idxs,self.z_axis_b_idxs], dim=-1) # (?,f,j,3) -> (?,f,j,3)
         xyz_comparable_vecs = self.broadcast_indexed_list_assign(xy_axis_vecs, yx_plane_vecs, z_axis_vecs) # (?,f,j,3,3)
-        z_axis_uvecs = guard_div(z_axis_vecs, torch.linalg.norm(z_axis_vecs, dim=3, keepdim=True)) # (?,f,j,3)
+        z_axis_uvecs = guard_div1(z_axis_vecs, torch.linalg.norm(z_axis_vecs, dim=3, keepdim=True)) # (?,f,j,3)
 
         yx_axis_vecs = torch.cross(xyz_comparable_vecs[:,:,self.jnt_idxs,self.yx_axis_a_idxs], # (?,f,j,3)
                                    xyz_comparable_vecs[:,:,self.jnt_idxs,self.yx_axis_b_idxs], dim=-1) # (?,f,j,3) -> (?,f,j,3)
-        yx_axis_uvecs = guard_div(yx_axis_vecs, torch.linalg.norm(yx_axis_vecs, dim=3, keepdim=True)) * self.yx_axis_dirs # (?,f,j,3)
+        yx_axis_uvecs = guard_div1(yx_axis_vecs, torch.linalg.norm(yx_axis_vecs, dim=3, keepdim=True)) * self.yx_axis_dirs # (?,f,j,3)
 
         # Derive frame rotation matrix from unit vec axis
-        xyz_axis_unit_vecs = self.broadcast_indexed_list_assign(xy_axis_uvecs, yx_axis_uvecs, z_axis_uvecs) # (?,f,j,3,3)
-        rotation_matrices = torch.cat([xyz_axis_unit_vecs, self.zero_tsr_bxfxjx3x1], dim=4) # (?,f,j,3,4)
-        rotation_matrices = torch.cat([rotation_matrices, self.homg_tsr_bxfxjx1x4], dim=3) # (?,f,j,4,4)
+        rotation_mtxs_3x3 = self.broadcast_indexed_list_assign(xy_axis_uvecs, yx_axis_uvecs, z_axis_uvecs) # (?,f,j,3,3)
 
         if self.validate_ops:
             assert(are_valid_numbers(xy_axis_uvecs) and are_unit_vectors(xy_axis_uvecs))
             assert(are_valid_numbers(z_axis_uvecs) and are_unit_vectors(z_axis_uvecs))
             assert(are_valid_numbers(yx_axis_uvecs) and are_unit_vectors(yx_axis_uvecs))
-            assert(are_rotation_matrices(rotation_matrices)), 'Contain a non-rotation (non-orthogonal) matrix'
+            # assert(are_rotation_matrices(rotation_mtxs_4x4)), 'Contains a non-orthogonal rotation matrix'
+            assert(are_rotation_matrices(rotation_mtxs_3x3)), 'Contains a non-orthogonal rotation matrix'
+            assert(are_proper_rotation_matrices(rotation_mtxs_3x3, self.nr_fb_idxs)), 'Contains an improper (reflection) matrix'
+            # apply rotation transformation to other quadruplet/quintuple keypoints (pivot, axis, and plane kpts)
+            # pap: pivot-axis-plane keypoints
+            aligned_pap_kpts = torch_matdot(rotation_mtxs_3x3, quadruplet_kpts[:,:,:,self.pap_kpts_idxs]) # (?,f,j,3,3)
+        else: aligned_pap_kpts = None
 
         # Using frame rotation matrix, transform position of non-origin translated
         # keypoints (in camera coordinated) to be represented in the joint frame
-        kpts_wrt_pvt_frms_hom = torch_matdot(rotation_matrices, quadruplet_kpts_hom)
-        kpts_wrt_pvt_frms = guard_div(kpts_wrt_pvt_frms_hom[:,:,:,:,:3], kpts_wrt_pvt_frms_hom[:,:,:,:,[3]]) # (?,f,j,4,3)
+        aligned_fb_vec = torch_matdot(rotation_mtxs_3x3, quadruplet_kpts[:,:,:,[self.free_kpt_idx]]) # (?,f,j,1,3)
 
-        return xyz_axis_unit_vecs, rotation_matrices, kpts_wrt_pvt_frms
+        return rotation_mtxs_3x3, rotation_mtxs_3x3, aligned_pap_kpts, aligned_fb_vec[:,:,:,0,:]
+
+    def broadcast_indexed_list_assign(self, xy_vecs_bxfxjx3, yx_vecs_bxfxjx3, z_vecs_bxfxjx3=None):
+        '''
+        xy_vecs_bxfxjx3:(?,f,j,3), yx_vecs_bxfxjx3:(?,f,j,3), z_vecs_bxfxjx3:(?,f,j,3) or None
+        Equivalent to:
+        jnt_idxs = np.arange(self.n_fbs)
+        xyz_vector_bxfxjx3x3 = tf.zeros((self.n_bsz,self.n_frm,self.n_fbs,3,3), dtype=tf.dtypes.float32) # (?,j,3,3)
+        xyz_vector_bxfxjx3x3[:,:,jnt_idxs,self.xy_idxs] = xy_vecs_bxfxjx3
+        xyz_vector_bxfxjx3x3[:,:,jnt_idxs,self.yx_idxs] = yx_vecs_bxfxjx3
+        xyz_vector_bxfxjx3x3[:,:,jnt_idxs,self.z_idx] = z_vecs_bxfxjx3
+        Returns: tensor of size (?,f,j,k,3), where k is 2 or 3
+        '''
+        if self.validate_ops:
+            assert(xy_vecs_bxfxjx3.shape==yx_vecs_bxfxjx3.shape) , 'xy_vecs_bxfxjx3:{}'.format(xy_vecs_bxfxjx3.shape)
+            assert(z_vecs_bxfxjx3 is None or yx_vecs_bxfxjx3.shape==z_vecs_bxfxjx3.shape), 'yx_vecs_bxfxjx3:{}'.format(yx_vecs_bxfxjx3.shape)
+
+        xyz_vector_bxfxkx3_list = [] # j*(?,f,k,3)
+        k_axs = 2 if z_vecs_bxfxjx3 is None else 3 # k==2->{xy,yx}, k==3->{xy,yx,z}
+
+        for j_idx in range(self.n_fbs):
+            xy_idx = self.xy_idxs[j_idx]
+            yx_idx = self.yx_idxs[j_idx]
+            if self.validate_ops:
+                jnt_xyz_idxs = np.array([xy_idx,yx_idx,self.z_idx]) # xy, yx, & z idx are unique and each, one of 0 1 & 2
+                assert(np.intersect1d(np.arange(0, 3), jnt_xyz_idxs).shape[0]==3), 'jnt_xyz_idxs:{}'.format(jnt_xyz_idxs)
+
+            jnt_xyz_vector_bxfx3_list = [] # k*(?,f,3)
+            for current_idx in range(k_axs):
+                if xy_idx==current_idx: jnt_xyz_vector_bxfx3_list.append(xy_vecs_bxfxjx3[:,:,j_idx]) # (?,f,3)
+                elif yx_idx==current_idx: jnt_xyz_vector_bxfx3_list.append(yx_vecs_bxfxjx3[:,:,j_idx]) # (?,f,3)
+                else: # self.z_idx==current_idx
+                    #assert(self.z_idx==current_idx), '{} vs. {}'.format(self.z_idx, current_idx)
+                    #assert(z_vecs_bxfxjx3 is not None), "z_vecs_bxfxjx3 can't be None if this statement is reached"
+                    jnt_xyz_vector_bxfx3_list.append(z_vecs_bxfxjx3[:,:,j_idx]) # (?,f,3)
+            xyz_vector_bxfxkx3_list.append(torch.stack(jnt_xyz_vector_bxfx3_list, dim=2)) # k*(?,f,3)-->(?,f,k,3)
+        xyz_vector_bxfxjxkx3 = torch.stack(xyz_vector_bxfxkx3_list, dim=2) # j*(?,f,k,3)-->(?,f,j,k,3)
+        return xyz_vector_bxfxjxkx3
+
+
+    def quaternion_rotation(self, quadruplet_kpts, plane_displace_vecs, pln_idx=0, fb_idx=1):
+        # Step 1: Rotate to align Axis-kpt (or Axis-Bone) with the pre-configured X or Y axis
+        xy_axis_vecs = quadruplet_kpts[:,:,:,self.axis_kpt_idx] # (?,f,j,4,3)->(?,f,j,3)
+        quat_vec1 = self.rotate_vecb2veca_quaternion(xy_axis_vecs, self.quadrant_1st_axis_uvec) # (?,f,j,4)
+        pln_fb_kpts_1of2_align = self.quaternion_rotate_vecs(
+            quadruplet_kpts[:,:,:,[self.plane_kpt_idx, self.free_kpt_idx]], quat_vec1, k=2) # (?,f,j,2,3)
+
+        # Step 2: Rotate to align Plane-kpt (or Plane-Bone) with the pre-configured XY-plane quadrant
+        # todo: for better precision, instead of multiplying, crgeate zero tensor and insert none zero components into tensor
+        if self.quintuple_kpts:
+            rot_pln_disp_vecs = self.quaternion_rotate_vecs(plane_displace_vecs, quat_vec1[:,:,:self.qb]) # (?,f,t,3)
+            yx_plane_vecs = torch.cat((pln_fb_kpts_1of2_align[:,:,:self.qb,pln_idx] + rot_pln_disp_vecs,
+                                       pln_fb_kpts_1of2_align[:,:,self.qb:,pln_idx]), dim=2) # (?,f,j,3)
+        else: yx_plane_vecs = pln_fb_kpts_1of2_align[:,:,:,pln_idx] # (?,f,j,2,3)->(?,f,j,3)
+        proj_yx_plane_vecs = yx_plane_vecs * self.plane_proj_mult # (?,f,j,3)
+        quat_vec2 = self.rotate_vecb2veca_quaternion(proj_yx_plane_vecs, self.quadrant_2nd_axis_uvec,
+                                                     parallel_axis_uvec=self.quadrant_1st_axis_uvec) # (?,f,j,4)
+        fb_vec_2of2_align = self.quaternion_rotate_vecs(pln_fb_kpts_1of2_align[:,:,:,fb_idx], quat_vec2) # (?,f,j,3)
+
+        if self.validate_ops:
+            pap_kpts_1of2_align = self.quaternion_rotate_vecs(
+                quadruplet_kpts[:,:,:,self.pap_kpts_idxs], quat_vec1, k=self.n_koi-1) # (?,f,j,3or4,3)
+            pap_kpts_2of2_align = self.quaternion_rotate_vecs(pap_kpts_1of2_align, quat_vec2, k=self.n_koi-1) # (?,f,j,3or4,3)
+            assert(kpts_are_on_axis_hemisphere(pap_kpts_2of2_align[:,:,:,2], self.quadrant_2nd_axis_uvec))
+        else: pap_kpts_2of2_align = None
+
+        if self.hflip_multiplier is not None:
+            fb_vec_2of2_align = fb_vec_2of2_align * self.hflip_multiplier # horizontal-flip for grouping symmetric fb-joints
+
+        return quat_vec1, quat_vec2, pap_kpts_2of2_align, fb_vec_2of2_align
 
     def rotate_vecb2veca_quaternion(self, vec_b, vec_a, parallel_axis_uvec=None, eps=1e-07):
         '''
@@ -622,9 +619,8 @@ class FreeBoneOrientation(nn.Module):
 
         vecb_x_veca = torch.cross(vec_b, vec_a, dim=-1) # (?,f,j,3)
         # axis of rotation is the unit vector of vec_b cross vec_a  [ self.torch_veclen ]
-        rot_axis_uvec = guard_div(vecb_x_veca, torch.linalg.norm(vecb_x_veca, dim=-1, keepdim=True))
-        cos_theta = guard_div(torch_vecdot(vec_b, vec_a, keepdim=True),
-                              torch.linalg.norm(vec_b, dim=-1, keepdim=True)) # (?,f,j,1)
+        rot_axis_uvec = guard_div2(vecb_x_veca, torch.linalg.norm(vecb_x_veca, dim=-1, keepdim=True))
+        cos_theta = guard_div2(torch_vecdot(vec_b, vec_a), torch.linalg.norm(vec_b, dim=-1, keepdim=True)) # (?,f,j,1)
 
         # # The derivative of torch.arccos is numerical unstable at -1 or 1,
         # # producing infinite values. Hence we clip values to open interval (-1,1)
@@ -636,13 +632,11 @@ class FreeBoneOrientation(nn.Module):
 
         # Alternative method to compute cos(theta/2) and sin(theta/2)
         # cos(x/2) = sqrt((1+cos(x))/2) and sin(x/z) = sqrt((1-cos(x))/2) for 0<=x<=pi
-        cos_half_theta = guard_sqrt(guard_div(self.one_tsr + cos_theta, self.two_tsr)) # q_w:(?,f,j,1)
+        cos_half_theta = guard_sqrt(guard_div2(self.one_tsr + cos_theta, self.two_tsr)) # q_w:(?,f,j,1)
         # todo: handle borderline case when cos_theta=-1 (ie. theta=0) >> no rotation
-        #assert (are_valid_numbers(cos_half_theta2))
         #assert (torch.all(torch.isclose(cos_half_theta2, cos_half_theta1, atol=1e-07)))
-        sin_half_theta = guard_sqrt(guard_div(self.one_tsr - cos_theta, self.two_tsr))
+        sin_half_theta = guard_sqrt(guard_div2(self.one_tsr - cos_theta, self.two_tsr))
         # todo: handle borderline case when sin_theta=1 (ie. theta=pi or 180) >> rotate twice about axis by 90"
-        #assert (are_valid_numbers(sin_half_theta2))
         #assert (torch.all(torch.isclose(sin_half_theta2, sin_half_theta1, atol=1e-07)))
 
         if self.validate_ops:
@@ -654,131 +648,179 @@ class FreeBoneOrientation(nn.Module):
             assert(are_valid_angle_axis(rot_axis_uvec, cos_theta))
             assert(are_parallel_to_axis_uvecs(rot_axis_uvec, parallel_axis_uvec))
 
-        # if parallel_axis_uvec is not None:
-        #     rot_axis_uvec = torch.round(rot_axis_uvec) # todo: why round?
         q_xyz = rot_axis_uvec * sin_half_theta # (?,f,j,3)
         return torch.cat([cos_half_theta, q_xyz], dim=-1) # (?,f,j,4)
 
-    def quaternion_rotate_vecs(self, vectors_3d, quaternion_vecs):
+    def quaternion_rotate_vecs(self, vectors_3d, quaternion_vecs, k=None):
         '''
         Rotate vectors_3d according to the quaternion_vecs
         Args:
-            vectors_3d: (?,f,j,4,3) 3D pose vectors of quad-kpts
+            vectors_3d: (?,f,j,k<=4,3) 3D pose vectors of quad-kpts
             quaternion_vecs: (?,f,j,4) corresponding quaternion vectors
-        Returns: (?,f,j,4,3) transformed 3D pose vectors of quad-kpts after rotation
+            k: if not None, repeat k dimension (1<=k<=4)
+        Returns: (?,f,j,k,3) or (?,f,j,3) if one_to_many=False >>
+                 transformed 3D pose vectors of quad-kpts after rotation
         '''
-        quaternion_vecs = torch.tile(torch.unsqueeze(quaternion_vecs, dim=-2), (1,1,1,4,1)) # (?,f,j,4,4)
-        uv = torch.cross(quaternion_vecs[..., 1:], vectors_3d, dim=-1) # (?,f,j,4,3)
-        uuv = torch.cross(quaternion_vecs[..., 1:], uv, dim=-1) # (?,f,j,4,3)
-        return vectors_3d + self.two_tsr * (quaternion_vecs[..., :1] * uv + uuv) # (?,f,j,4,3)
+        if k is not None:
+            quaternion_vecs = torch.tile(torch.unsqueeze(quaternion_vecs, dim=-2), (1,1,1,k,1)) # (?,f,j,k,4)
+        uv = torch.cross(quaternion_vecs[..., 1:], vectors_3d, dim=-1) # (?,f,j,k,3) or (?,f,j,3)
+        uuv = torch.cross(quaternion_vecs[..., 1:], uv, dim=-1) # (?,f,j,k,3) or (?,f,j,3)
+        return vectors_3d + self.two_tsr * (quaternion_vecs[..., :1] * uv + uuv) # (?,f,j,k,3) or (?,f,j,3)
 
-    # Test version until 06/11/2022
-    # def forward(self, input_tensor, **kwargs):
-    #     if input_tensor.shape[0]!=self.batch_size: self.build_for_batch(input_tensor.shape[0])
-    #
-    #     pivot_kpts = input_tensor[:,:,:,self.pivot_kpt_idx,:3] # (?,f,j,4,3)->(?,f,j,3)
-    #     xy_axis_kpts = input_tensor[:,:,:,self.xy_axis_kpt_idx,:3] # (?,f,j,4,3)->(?,f,j,3)
-    #     yx_plane_kpts = input_tensor[:,:,:,self.yx_plane_kpt_idx,:3] # (?,f,j,4,3)->(?,f,j,3)
-    #     quadruplet_kpts_hom = torch.cat([input_tensor, self.ones_tsr_bxfxjx4x1], dim=4) # (?,f,j,4,3)+(?,f,j,4,1)->(?,f,j,4,4)
-    #
-    #     # Deduce translation vector from pivot joint. Frame origin will be translated to pivot joint
-    #     neg_pivot_kpts_4 = torch.cat([-pivot_kpts, self.zero_tsr_bxfxjx1], dim=3) # (?,f,j,4)
-    #     neg_pivot_kpts_4x4 = torch.stack(
-    #         (self.zero_tsr_bxfxjx4,self.zero_tsr_bxfxjx4,self.zero_tsr_bxfxjx4,neg_pivot_kpts_4), dim=4) # (?,f,j,4,4)
-    #     translate_matrices = self.identity_bxfxjx4x4 + neg_pivot_kpts_4x4 # (?,f,j,4,4)
-    #     #assert(are_translation_matrices(translate_matrices)), "Contain non-translation matrix\n{}".format(translate_matrices)
-    #
-    #     # Get limb vectors from pairs of keypoint positions
-    #     xy_axis_vecs = xy_axis_kpts - pivot_kpts # (?,f,j,3)
-    #     yx_plane_vecs = yx_plane_kpts - pivot_kpts # (?,f,j,3)
-    #     xyz_comparable_vecs = self.broadcast_indexed_list_assign(xy_axis_vecs, yx_plane_vecs) # (?,f,j,3,3)
-    #
-    #     # Define new x-axis, y-axis, and z-axis
-    #     xy_axis_uvecs = guard_div(xy_axis_vecs, torch.linalg.norm(xy_axis_vecs, dim=3, keepdim=True)) * self.xy_axis_dirs # (?,f,j,3)
-    #     #assert(are_valid_numbers(xy_axis_uvecs)), 'xy_axis_uvecs:\n{}'.format(xy_axis_uvecs)
-    #     #assert(are_unit_vectors(xy_axis_uvecs)), '|xy_axis_uvecs|:{}'.format(torch.linalg.norm(xy_axis_uvecs, dim=-1))
-    #
-    #     z_axis_vecs = torch.cross(xyz_comparable_vecs[:,:,self.jnt_idxs,self.z_axis_a_idxs], # (?,f,j,3)
-    #                               xyz_comparable_vecs[:,:,self.jnt_idxs,self.z_axis_b_idxs]) # (?,f,j,3) -> (?,f,j,3)
-    #     xyz_comparable_vecs = self.broadcast_indexed_list_assign(xy_axis_vecs, yx_plane_vecs, z_axis_vecs) # (?,f,j,3,3)
-    #     z_axis_uvecs = guard_div(z_axis_vecs, torch.linalg.norm(z_axis_vecs, dim=3, keepdim=True)) # (?,f,j,3)
-    #     #assert(are_valid_numbers(z_axis_uvecs)), 'z_axis_uvecs:\n{}'.format(z_axis_uvecs)
-    #     #assert(are_unit_vectors(z_axis_uvecs)), '|z_axis_uvecs|:{}'.format(torch.linalg.norm(z_axis_uvecs, dim=-1))
-    #
-    #     yx_axis_vecs = torch.cross(xyz_comparable_vecs[:,:,self.jnt_idxs,self.yx_axis_a_idxs], # (?,f,j,3)
-    #                                xyz_comparable_vecs[:,:,self.jnt_idxs,self.yx_axis_b_idxs]) # (?,f,j,3) -> (?,f,j,3)
-    #     yx_axis_uvecs = guard_div(yx_axis_vecs, torch.linalg.norm(yx_axis_vecs, dim=3, keepdim=True)) * self.yx_axis_dirs # (?,f,j,3)
-    #     #assert(are_valid_numbers(yx_axis_uvecs)), 'yx_axis_uvecs:\n{}'.format(yx_axis_uvecs)
-    #     #assert(are_unit_vectors(yx_axis_uvecs)), '|yx_axis_uvecs|:{}'.format(torch.linalg.norm(yx_axis_uvecs, dim=-1))
-    #
-    #     # Derive frame rotation matrix from unit vec axis
-    #     xyz_axis_unit_vecs = self.broadcast_indexed_list_assign(xy_axis_uvecs, yx_axis_uvecs, z_axis_uvecs) # (?,f,j,3,3)
-    #     rotation_matrices = torch.cat([xyz_axis_unit_vecs, self.zero_tsr_bxfxjx3x1], dim=4) # (?,f,j,3,4)
-    #     rotation_matrices = torch.cat([rotation_matrices, self.homg_tsr_bxfxjx1x4], dim=3) # (?,f,j,4,4)
-    #     #assert(are_rotation_matrices(rotation_matrices)), 'Contain a non-rotation (non-orthogonal) matrix'
-    #     transform_matrices = torch.matmul(rotation_matrices, translate_matrices) # (?,f,j,4,4)
-    #
-    #     # Using frame rotation matrix, transform position of non-origin translated
-    #     # keypoints (in camera coordinated) to be represented in the joint frame
-    #     kpts_wrt_pvt_frms_hom = torch_matdot(transform_matrices, quadruplet_kpts_hom)
-    #     kpts_wrt_pvt_frms = guard_div(kpts_wrt_pvt_frms_hom[:,:,:,:,:3], kpts_wrt_pvt_frms_hom[:,:,:,:,[3]]) # (?,f,j,4,3)
-    #     #assert(are_valid_numbers(kpts_wrt_pvt_frms)), 'kpts_wrt_pvt_frms:\n{}'.format(kpts_wrt_pvt_frms)
-    #     assert (pivot_kpts_is_at_origin(kpts_wrt_pvt_frms[:,:,:,self.pivot_kpt_idx]))
-    #     assert (axis_kpts_lie_on_axis(kpts_wrt_pvt_frms[:,:,:,self.xy_axis_kpt_idx], self.xy_axis_endpoints))
-    #     assert (plane_kpts_line_on_xyplane(kpts_wrt_pvt_frms[:,:,:,self.yx_plane_kpt_idx], self.planar_4x4_matrix))
-    #
-    #     # Compute free limb vectors
-    #     free_bone_vecs = kpts_wrt_pvt_frms[:,:,:,self.free_kpt_idx] - kpts_wrt_pvt_frms[:,:,:,self.pivot_kpt_idx] # (?,f,j,3)
-    #     free_bone_uvecs = guard_div(free_bone_vecs, torch.linalg.norm(free_bone_vecs, dim=3, keepdim=True)) # (?,f,j,3)
-    #     #assert(are_valid_numbers(free_bone_uvecs)), 'free_bone_uvecs:\n{}'.format(free_bone_uvecs)
-    #
-    #     if self.ret_mode==-1:
-    #         return to_numpy(pivot_kpts), to_numpy(xyz_axis_unit_vecs), \
-    #                to_numpy(transform_matrices), to_numpy(free_bone_uvecs)
-    #     elif self.ret_mode==1:
-    #         return free_bone_uvecs, free_bone_vecs # (?,f,j,3)
-    #     return free_bone_uvecs, None # (?,f,j,3) # ret_mode == 0
 
-    def broadcast_indexed_list_assign(self, xy_vecs_bxfxjx3, yx_vecs_bxfxjx3, z_vecs_bxfxjx3=None):
-        '''
-        xy_vecs_bxfxjx3:(?,j,3), yx_vecs_bxfxjx3:(?,j,3), z_vecs_bxfxjx3:(?,j,3) or None
-        Equivalent to:
-        jnt_idxs = np.arange(self.n_fb_joints)
-        xyz_vector_bxfxjx3x3 = tf.zeros((self.batch_size,self.n_fb_joints,3,3), dtype=tf.dtypes.float32) # (?,j,3,3)
-        xyz_vector_bxfxjx3x3[:,jnt_idxs,self.xy_idxs] = xy_vecs_bxfxjx3
-        xyz_vector_bxfxjx3x3[:,jnt_idxs,self.yx_idxs] = yx_vecs_bxfxjx3
-        xyz_vector_bxfxjx3x3[:,jnt_idxs,self.z_idx] = z_vecs_bxfxjx3
-        '''
-        if self.validate_ops:
-            assert(xy_vecs_bxfxjx3.shape==yx_vecs_bxfxjx3.shape) , 'xy_vecs_bxfxjx3:{}'.format(xy_vecs_bxfxjx3.shape)
-            assert(z_vecs_bxfxjx3 is None or yx_vecs_bxfxjx3.shape==z_vecs_bxfxjx3.shape), 'yx_vecs_bxfxjx3:{}'.format(yx_vecs_bxfxjx3.shape)
-
-        xyz_vector_bxfx3x3_list = [] # j*(?,f,3,3)
-        for j_idx in range(self.n_fb_joints):
-            xy_idx = self.xy_idxs[j_idx]
-            yx_idx = self.yx_idxs[j_idx]
-            if self.validate_ops:
-                jnt_xyz_idxs = np.array([xy_idx,yx_idx,self.z_idx])
-                assert(np.intersect1d(np.arange(0, 3), jnt_xyz_idxs).shape[0]==3), 'jnt_xyz_idxs:{}'.format(jnt_xyz_idxs)
-
-            jnt_xyz_vector_bxfx3_list = [] # 3*(?,f,3)
-            while len(jnt_xyz_vector_bxfx3_list)<3:
-                current_idx = len(jnt_xyz_vector_bxfx3_list)
-                if xy_idx==current_idx: jnt_xyz_vector_bxfx3_list.append(xy_vecs_bxfxjx3[:,:,j_idx]) # (?,f,3)
-                elif yx_idx==current_idx: jnt_xyz_vector_bxfx3_list.append(yx_vecs_bxfxjx3[:,:,j_idx]) # (?,f,3)
-                else:
-                    if z_vecs_bxfxjx3 is None: jnt_xyz_vector_bxfx3_list.append(self.zero_tsr_bxfx3)
-                    elif self.z_idx==current_idx: jnt_xyz_vector_bxfx3_list.append(z_vecs_bxfxjx3[:,:,j_idx]) # (?,f,3)
-            xyz_vector_bxfx3x3_list.append(torch.stack(jnt_xyz_vector_bxfx3_list, dim=2)) # 3'*(?,f,3)-->(?,f,3',3)
-        xyz_vector_bxfxjx3x3 = torch.stack(xyz_vector_bxfx3x3_list, dim=2) # j*(?,f,3,3)-->(?,f,j,3,3)
-        return xyz_vector_bxfxjx3x3
-
+# class FreeBoneConstruct(nn.Module):
+#
+#     def __init__(self, qset_kpt_idxs, batch_size, xy_yx_axis_dirs=None, z_axis_ab_idxs=None, yx_axis_ab_idxs=None, xy_yx_idxs=None,
+#                  quad_uvec_axes1=None, quad_uvec_axes2=None, plane_proj_mult=None, hflip_multiplier=None, nr_fb_idxs=None,
+#                  n_frm=1, n_fbs=16, pivot_kpt_idx=0, xy_axis_kpt_idx=1, yx_plane_kpt_idx=2, free_kpt_idx=-1, z_idx=2,
+#                  rot_tfm_mode=0, ret_mode=0, quintuple=False, invert_pose=False, validate_ops=False, **kwargs):
+#         super(FreeBoneConstruct, self).__init__(**kwargs)
+#
+#         self.qset_kpt_idxs = qset_kpt_idxs
+#         self.xy_axis_dirs = xy_yx_axis_dirs[0] # xy
+#         self.yx_axis_dirs = xy_yx_axis_dirs[1] # yx
+#         self.z_axis_a_idxs = z_axis_ab_idxs[0] # a
+#         self.z_axis_b_idxs = z_axis_ab_idxs[1] # b
+#         self.yx_axis_a_idxs = yx_axis_ab_idxs[0] # a
+#         self.yx_axis_b_idxs = yx_axis_ab_idxs[1] # b
+#         self.xy_idxs = xy_yx_idxs[0] # xy
+#         self.yx_idxs = xy_yx_idxs[1] # yx
+#         self.z_idx = z_idx
+#
+#         self.n_fbs = n_fbs
+#         # self.pivot_kpt_idx = pivot_kpt_idx
+#         # self.axis_kpt_idx = xy_axis_kpt_idx
+#         # self.plane_kpt_idx = yx_plane_kpt_idx
+#         # self.free_kpt_idx = free_kpt_idx
+#         # self.ret_mode = ret_mode
+#         self.validate_ops = validate_ops
+#         self.invert_pose = invert_pose
+#         self.nr_fb_idxs = nr_fb_idxs # (j*,)
+#         self.qb = 4 #3
+#
+#         self.oat_atol1 = 1e-05 # tolerance for on-axis-test
+#         self.oat_atol2 = 1e-06 # tolerance for on-axis-test
+#
+#         self.invert_pose_mult = torch.reshape(torch_t([-1,-1,1]), (1,1,1,1,3))
+#         # self.jnt_idxs = np.arange(self.n_fbs) # (j,) do NOT remove, very necessary!
+#         self.n_koi = 4
+#         self.pap_kpts_idxs = [self.pivot_kpt_idx,self.axis_kpt_idx, self.plane_kpt_idx]
+#         self.build_for_batch(batch_size, n_frm)
+#
+#     def build_for_batch(self, batch_size, n_frames):
+#         # input_shape:(?,f,j,4,3)
+#         self.n_bsz = batch_size
+#         self.n_frm = n_frames
+#
+#         if self.validate_ops:
+#             self.axis_2x2_matrix = torch.zeros((self.n_bsz,self.n_frm,self.n_fbs,2,2),
+#                                                dtype=torch.float32, device=torch.device(processor)) # (?,f,j,4,4)
+#             self.axis_2x2_matrix[:,:,self.jnt_idxs,0,self.xy_idxs] = self.xy_axis_dirs[0,0,:,0] #torch_t(1.)
+#             self.axis_test_uvecs = torch.zeros((self.n_bsz,self.n_frm,self.n_fbs,3),
+#                                                dtype=torch.float32, device=torch.device(processor)) # (?,f,j,3)
+#             self.axis_test_uvecs[:,:,self.jnt_idxs,self.xy_idxs] = self.xy_axis_dirs[0,0,:,0]
+#             # Needed for tests and assertions
+#             self.planar_4x4_matrix = torch.zeros((self.n_bsz,self.n_frm,self.n_fbs,4,4),
+#                                                  dtype=torch.float32, device=torch.device(processor)) # (?,f,j,4,4)
+#             self.planar_4x4_matrix[:,:,[0,1,3,3,3,3],[1,2,0,1,2,3]] = torch_t(1.)
+#             self.pi_tsr = torch_t(np.pi)
+#
+#     def forward(self, input_tensor, fbj_idx, fb_vecs, **kwargs):
+#         if input_tensor.shape[:2]!=(self.n_bsz, self.n_frm):
+#             self.build_for_batch(input_tensor.shape[0], input_tensor.shape[1])
+#         if self.invert_pose: input_tensor = input_tensor * self.invert_pose_mult
+#
+#         pivot_kpt_idx, axis_kpt_idx, plane_kpt_idx = self.qset_kpt_idxs[fbj_idx][:3]
+#         free_kpt_idx = self.qset_kpt_idxs[fbj_idx][-1]
+#
+#         # Step 0: Translate quadruplet/quintuple keypoints such that rotation pivot is at origin
+#         pivot_kpts = input_tensor[:,:,[pivot_kpt_idx],:3] # (?,f,1,3)
+#
+#         # quadruplet_kpts = input_tensor - pivot_kpts # (?,f,j,4or5,3)
+#
+#         fb_aligned_pose_kpts = self.matrix_rotation(input_tensor - pivot_kpts, fbj_idx, axis_kpt_idx, plane_kpt_idx)
+#
+#         if self.validate_ops:
+#             assert(are_valid_numbers(fb_aligned_pose_kpts))
+#             assert(pivot_kpts_is_at_origin(fb_aligned_pose_kpts[:,:,pivot_kpts]))
+#             assert(axis_kpts_lie_on_axis(fb_aligned_pose_kpts[:,:,axis_kpt_idx], self.axis_test_uvecs,
+#                                          self.axis_2x2_matrix, atol1=self.oat_atol1, atol2=self.oat_atol2))
+#             assert(plane_kpts_line_on_xyplane(fb_aligned_pose_kpts[:,:,plane_kpt_idx], self.planar_4x4_matrix))
+#
+#         # Insert free-bone vector after alignment
+#         fb_aligned_pose_kpts[:,:,free_kpt_idx] = fb_vecs
+#         return fb_aligned_pose_kpts
+#
+#     def matrix_rotation(self, pose_kpts, fbj_idx, axis_kpt_idx, plane_kpt_idx):
+#
+#         # Get limb vectors from pairs of keypoint positions
+#         xy_axis_vecs = pose_kpts[:,:,:,axis_kpt_idx] # (?,f,j,3)->(?,f,3)
+#         yx_plane_vecs = pose_kpts[:,:,:,plane_kpt_idx] # (?,f,j,3)->(?,f,3)
+#         xyz_comparable_vecs = self.broadcast_indexed_list_assign(fbj_idx, xy_axis_vecs, yx_plane_vecs) # (?,f,2,3)
+#
+#         # Define new x-axis, y-axis, and z-axis
+#         xy_axis_uvecs = guard_div1(xy_axis_vecs, torch.linalg.norm(xy_axis_vecs, dim=-1, keepdim=True)) * self.xy_axis_dirs[:,:,fbj_idx] # (?,f,3)
+#
+#         z_axis_vecs = torch.cross(xyz_comparable_vecs[:,:,self.z_axis_a_idxs[fbj_idx]], # (?,f,3)
+#                                   xyz_comparable_vecs[:,:,self.z_axis_b_idxs[fbj_idx]], dim=-1) # (?,f,3) -> (?,f,3)
+#         xyz_comparable_vecs = self.broadcast_indexed_list_assign(fbj_idx, xy_axis_vecs, yx_plane_vecs, z_axis_vecs) # (?,f,3,3)
+#         z_axis_uvecs = guard_div1(z_axis_vecs, torch.linalg.norm(z_axis_vecs, dim=-1, keepdim=True)) # (?,f,j,3)
+#
+#         yx_axis_vecs = torch.cross(xyz_comparable_vecs[:,:,self.yx_axis_a_idxs[fbj_idx]], # (?,f,3)
+#                                    xyz_comparable_vecs[:,:,self.yx_axis_b_idxs[fbj_idx]], dim=-1) # (?,f,3) -> (?,f,3)
+#         yx_axis_uvecs = guard_div1(yx_axis_vecs, torch.linalg.norm(yx_axis_vecs, dim=-1, keepdim=True)) * self.yx_axis_dirs[:,:,fbj_idx] # (?,f,3)
+#
+#         # Derive frame rotation matrix from unit vec axis
+#         rotation_mtxs_3x3 = self.broadcast_indexed_list_assign(fbj_idx, xy_axis_uvecs, yx_axis_uvecs, z_axis_uvecs) # (?,f,3,3)
+#
+#         if self.validate_ops:
+#             assert(are_valid_numbers(xy_axis_uvecs) and are_unit_vectors(xy_axis_uvecs))
+#             assert(are_valid_numbers(z_axis_uvecs) and are_unit_vectors(z_axis_uvecs))
+#             assert(are_valid_numbers(yx_axis_uvecs) and are_unit_vectors(yx_axis_uvecs))
+#             # assert(are_rotation_matrices(rotation_mtxs_4x4)), 'Contains a non-orthogonal rotation matrix'
+#             assert(are_rotation_matrices(rotation_mtxs_3x3)), 'Contains a non-orthogonal rotation matrix'
+#             assert(are_proper_rotation_matrices(rotation_mtxs_3x3, self.nr_fb_idxs)), 'Contains an improper (reflection) matrix'
+#
+#         # apply rotation transformation to all keypoints
+#         fb_aligned_pose_kpts = torch_matdot(rotation_mtxs_3x3, pose_kpts) # (?,f,j,3)
+#         return fb_aligned_pose_kpts
+#
+#     def broadcast_indexed_list_assign(self, fbj_idx, xy_vecs_bxfx3, yx_vecs_bxfx3, z_vecs_bxfx3=None):
+#         '''
+#         xy_vecs_bxfx3:(?,f,3), yx_vecs_bxfx3:(?,f,3), z_vecs_bxfx3:(?,f,3) or None
+#         Equivalent to:
+#         xyz_vector_bxfx3x3 = tf.zeros((self.n_bsz,self.n_frm,3,3), dtype=tf.dtypes.float32) # (?,f,3,3)
+#         xyz_vector_bxfx3x3[:,:,self.xy_idxs] = xy_vecs_bxfx3
+#         xyz_vector_bxfx3x3[:,:,self.yx_idxs] = yx_vecs_bxfx3
+#         xyz_vector_bxfx3x3[:,:,self.z_idx] = z_vecs_bxfx3
+#         Returns: tensor of size (?,f,k,3), where k is 2 or 3
+#         '''
+#         if self.validate_ops:
+#             assert(xy_vecs_bxfx3.shape==yx_vecs_bxfx3.shape) , 'xy_vecs_bxfx3:{}'.format(xy_vecs_bxfx3.shape)
+#             assert(z_vecs_bxfx3 is None or yx_vecs_bxfx3.shape==z_vecs_bxfx3.shape), 'yx_vecs_bxfx3:{}'.format(yx_vecs_bxfx3.shape)
+#
+#         k_axs = 2 if z_vecs_bxfx3 is None else 3 # k==2->{xy,yx}, k==3->{xy,yx,z}
+#
+#         xy_idx = self.xy_idxs[fbj_idx]
+#         yx_idx = self.yx_idxs[fbj_idx]
+#         if self.validate_ops:
+#             jnt_xyz_idxs = np.array([xy_idx,yx_idx,self.z_idx]) # xy, yx, & z idx are unique and each, one of 0 1 & 2
+#             assert(np.intersect1d(np.arange(0, 3), jnt_xyz_idxs).shape[0]==3), 'jnt_xyz_idxs:{}'.format(jnt_xyz_idxs)
+#
+#         jnt_xyz_vector_bxfx3_list = [] # k*(?,f,3)
+#         for current_idx in range(k_axs):
+#             if xy_idx==current_idx: jnt_xyz_vector_bxfx3_list.append(xy_vecs_bxfx3) # (?,f,3)
+#             elif yx_idx==current_idx: jnt_xyz_vector_bxfx3_list.append(yx_vecs_bxfx3) # (?,f,3)
+#             else: jnt_xyz_vector_bxfx3_list.append(z_vecs_bxfx3) # (?,f,3)
+#
+#         xyz_vector_bxfxkx3 = torch.stack(jnt_xyz_vector_bxfx3_list, dim=2) # k*(?,f,3)-->(?,f,k,3)
+#         return xyz_vector_bxfxkx3
 
 
 def bpc_likelihood_func(bone_ratio_prop, variance, exponent_coefs, ratio_mean):
     # bone_ratio_prop->(?,f,r), variance->(1,1,r), exponent_coefs->(1,1,r), ratio_mean->(1,1,r)
     mean_centered = bone_ratio_prop - ratio_mean # (?,f,r)
-    exponent = torch_t(-1/2) * guard_div(torch.square(mean_centered), variance) # (?,f,r)
+    exponent = torch_t(-1/2) * guard_div1(torch.square(mean_centered), variance) # (?,f,r)
     likelihoods = exponent_coefs * torch.exp(exponent) # (?,f,r)
     #assert(likelihoods_are_non_negative(likelihoods))
     return likelihoods # (?,f,r)
@@ -794,21 +836,6 @@ def jmc_likelihood_func(joint_freelimb_uvec, uvec_means, inv_covariance, exponen
     return likelihoods[:,:,:,0,0] # (?,f,j,1,1)-->(?,f,j)
 
 
-def log_likelihood_func(likelihoods, scale, epsilon):
-    log_likelihoods = torch.log((likelihoods * scale) + epsilon)
-    return -log_likelihoods
-
-def sigm_log_likelihood_func(likelihoods, scale, epsilon):
-    log_likelihoods = torch.log((likelihoods * scale) + epsilon)
-    actv_likelihoods = torch.sigmoid(-log_likelihoods)
-    return actv_likelihoods
-
-def tanh_likelihood_func(likelihoods, scale):
-    scaled_likelihoods = likelihoods * scale
-    actv_likelihoods = torch.tanh(-scaled_likelihoods)
-    return actv_likelihoods
-
-
 def log_likelihood_loss_func(likelihoods, function_modes, logli_mean, logli_std, logli_min, logli_span,
                              nilm_wgts, logli_spread, log_of_spread, log_lihood_eps,
                              move_up_const, ret_move_const=False):
@@ -818,7 +845,6 @@ def log_likelihood_loss_func(likelihoods, function_modes, logli_mean, logli_std,
     if logli_func_mode==1: # shift and spread the range of log-likelihood
         log_likelihoods = torch.log(likelihoods + logli_spread) - log_of_spread # same as log(x+1) when spread==1
     elif logli_func_mode==2: # compute log of inverse log-likelihood
-        # logli_spread within [1-e5, 1] prevents nan values from division by 0
         log_likelihoods = torch.log(logli_spread / (likelihoods + logli_spread))
     else: # compute vanilla log of likelihood
         log_likelihoods = torch.log(likelihoods) # may produce nans when likelihood_values<1
@@ -828,7 +854,6 @@ def log_likelihood_loss_func(likelihoods, function_modes, logli_mean, logli_std,
         log_likelihoods = (log_likelihoods - logli_mean) / logli_std
     elif norm_logli_func_mode==2: # normalized min-max-scale log-likelihood (nmml)
         log_likelihoods = (log_likelihoods - logli_min) / logli_span
-        # todo: clip [0,1] for values exceeding 1. and assert outcome is within range
     elif norm_logli_func_mode==3: # normalized inverse of log-likelihood mean weighted log-likelihood (nilm)
         log_likelihoods = log_likelihoods * nilm_wgts
 
@@ -846,43 +871,61 @@ def log_likelihood_loss_func(likelihoods, function_modes, logli_mean, logli_std,
     return log_likelihoods #torch.mean(log_likelihoods)
 
 
-def uvec_euclidean_dist_jmc(joint_freelimb_uvec, cluster_centroids, cluster_radius):
-    # cluster_centroids->(1,1,j,c,3), cluster_radius->(1,1,j,c,1)
-    x = torch.unsqueeze(joint_freelimb_uvec, dim=3) # (?,f,j,3)->(?,f,j,1,3)
-    x2centroids = x - cluster_centroids # (?,f,j,c,3)
-    euc_dist_2_ctrs = torch.linalg.norm(x2centroids, dim=4, keepdim=True) # (?,f,j,c,1)
-    oor_dist_errs = euc_dist_2_ctrs - cluster_radius # (?,f,j,c,1) out-of-range error
-    min_errs, min_idxs = torch.min(oor_dist_errs, dim=3) # (?,f,j,1)
-    actv_min_errs = torch.relu(min_errs) # (?,f,j,1)
-    return torch.mean(actv_min_errs) # (1,)
 
+def orth_project_and_scaledown_align(poses_3d, pred_3dto2d_scale, target_rootkpts, root_kpt_idx, mode=-1):
+    orth_proj_poses_2d = pred_3dto2d_scale * poses_3d[:,:,:,:2] # (?,f,j,2)
+    if mode==-1:
+        # Option-1: move projected-3dto2d-pose target-2d-pose location.
+        # Tolerant to 3D pose not rooted at origin (Lesser error).
+        translate_pose_vec = target_rootkpts - orth_proj_poses_2d[:,:,[root_kpt_idx]] # (?,f,1,2)
+        trans_orth_proj_poses_2d = orth_proj_poses_2d + translate_pose_vec # (?,f,j,2)
+    elif mode==-2:
+        # Option-2: move projected-3dto2d-pose target-2d-pose location.
+        # Strict to 3D pose not rooted at origin. Expects 3D poses' root-kpt is at origin
+        trans_orth_proj_poses_2d = orth_proj_poses_2d + target_rootkpts # (?,f,j,2)
+    elif mode==-3:
+        # Option-3: for when target-2d-pose is moved to origin
+        # Tolerant to 3D pose not rooted at origin (Lesser error).
+        trans_orth_proj_poses_2d = orth_proj_poses_2d - orth_proj_poses_2d[:,:,[root_kpt_idx]] # (?,f,1,2)
+    else: # mode==-4
+        #assert(mode==-4), 'mode:{}'.format(mode)
+        # Option-4: for when target-2d-pose is moved to origin
+        # Strict to 3D pose not rooted at origin. Expects 3D poses' root-kpt is at origin
+        trans_orth_proj_poses_2d = orth_proj_poses_2d
+    #assert(torch.all(torch.isclose(trans_orth_proj_poses_2d[:,:,[root_kpt_idx]], target_rootkpts, atol=1e-03)))
+    return trans_orth_proj_poses_2d
 
-def tc_orthographic_projection(poses_3d, projection_mtx, homogenous_one):
-    pose_tsr_shape = poses_3d.shape
-    bs = pose_tsr_shape[0]
-    if projection_mtx is None:
-        projection_mtx = torch.zeros((bs,1,17,4,4), dtype=torch.float32, device=torch.device(processor)) # (?,f,17,4,4)
-        projection_mtx[:,:,:,[0,1,3],[0,1,3]] =  1
-        homogenous_one = torch.ones((bs,1,17,1), dtype=torch.float32, device=torch.device(processor)) # (?,f,17,1)
-    assert (pose_tsr_shape[2:]==(17,3)), 'poses_3d.shape:{}'.format(pose_tsr_shape) # (?,f,17,3)
-    assert (bs<=homogenous_one.shape[0]), '{} vs. {}'.format(bs, homogenous_one.shape)
+def scaleup_align(poses_2d, pred_2dto3d_scale, root_kpt_idx):
+    rooted_poses_2d = poses_2d - poses_2d[:,:,[root_kpt_idx]] # (?,f,j,2)
+    return pred_2dto3d_scale * rooted_poses_2d # (?,f,j,2)
 
-    homg_3d_poses = torch.cat([poses_3d, homogenous_one[:bs]], dim=-1) # (?,f,17,4)
-    homg_3d_poses = torch.unsqueeze(homg_3d_poses, dim=4) # (?,f,17,4,1)
-    proj_2d_poses = torch.matmul(projection_mtx[:bs], homg_3d_poses)
-    assert (homg_3d_poses.shape[1:]==(1,17,4,1)), 'homg_3d_poses.shape:{}'.format(homg_3d_poses.shape) # (?,f,17,3) # (?,f,17,4,1)
-    assert (proj_2d_poses.shape[1:]==(1,17,4,1)), 'proj_2d_poses.shape:{}'.format(proj_2d_poses.shape) # (?,f,17,3) # (?,f,17,4,1)
-    assert (torch.all(torch.isclose(proj_2d_poses[:,:,:,2,0], torch_t(0.), atol=1e-05))) #*!
-    assert (torch.all(torch.isclose(proj_2d_poses[:,:,:,3,0], torch_t(1.), atol=1e-05)))
-    return proj_2d_poses[:,:,:,:2,0] # (?,f,17,2)
+def tc_scale_normalize(predicted, target, root_kpt_idx, pad, ret_scl=True):
+    # scaled to match target 2d poses
+    #assert(predicted.shape==target.shape), '{} vs {}'.format(predicted.shape, target.shape) # (?,f,p,3)
 
-def tc_scale_normalize(predicted, target):
-    assert (predicted.shape==target.shape) # (?,f,p,3)
+    # select middle 2d-pose(s) corresponding to 3d-pose
+    if pad > 0:
+        target = target[:, pad:-pad, :, :2].contiguous() # (?,f,j,2)
+    else: target = target[:, :, :, :2].contiguous() # (?,f,j,2)
+
+    # Added by Lawrence on 05/22/22. Recommended to get best scale factor
+    rooted_pred_2d = predicted - predicted[:,:,[root_kpt_idx]]
+    rooted_targ_2d = target - target[:,:,[root_kpt_idx]]
+
+    norm_predicted = torch.mean(torch.sum(rooted_pred_2d**2, dim=3, keepdim=True), dim=2, keepdim=True)
+    norm_target = torch.mean(torch.sum(rooted_targ_2d*rooted_pred_2d, dim=3, keepdim=True), dim=2, keepdim=True)
+    scale = norm_target / norm_predicted # (?,1,1,1)
+    if ret_scl: return scale
+    return scale * predicted
+
+def np_scale_normalize(predicted, target):
+    assert (predicted.shape==target.shape), '{} vs {}'.format(predicted.shape, target.shape) # (?,f,p,3)
     # Added by Lawrence on 05/22/22. Recommended to get best scale factor
     predicted -= predicted[:,:,[0]]
     target -= target[:,:,[0]]
 
-    norm_predicted = torch.mean(torch.sum(predicted**2, dim=3, keepdim=True), dim=2, keepdim=True)
-    norm_target = torch.mean(torch.sum(target*predicted, dim=3, keepdim=True), dim=2, keepdim=True)
-    scale = norm_target / norm_predicted
+    norm_predicted = np.mean(np.sum(predicted**2, axis=3, keepdims=True), axis=2, keepdims=True)
+    norm_target = np.mean(np.sum(target*predicted, axis=3, keepdims=True), axis=2, keepdims=True)
+    scale = norm_target / norm_predicted # (?,1,1,1)
+    print('scale.shape >> {}'.format(scale.shape))
     return scale * predicted

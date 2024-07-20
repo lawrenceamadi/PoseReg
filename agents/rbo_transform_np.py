@@ -3,11 +3,10 @@
 # @Author  : Lawrence A.
 # @Email   : lamadi@hawk.iit.edu
 # @File    : rbo_transform_np.py
-# @Software: videopose3d
+# @Software: pose.reg
 
 import os
 import math
-import numpy as np
 from scipy.spatial.transform import Rotation as sR
 
 from agents.helper import *
@@ -47,6 +46,20 @@ def are_translation_matrices(T, is_transposed=False):
         print ('Not translation matrix:\n{}'.format(np.concatenate((diagonals_are_1s, zero_terms_are_0s), axis=-1)))
     return are_translations
 
+def are_freebones_similar(rmtx_free_bone_uvecs, quat_free_bone_uvecs):
+    fb_diffs = rmtx_free_bone_uvecs - quat_free_bone_uvecs
+    fb_dists = np.linalg.norm(fb_diffs, axis=-1, keepdims=True)
+    are_similar_fbs = np.isclose(fb_dists[...,0], 0, atol=5e-04)
+    all_are_similar_fbs = np.all(are_similar_fbs)
+    if not all_are_similar_fbs:
+        are_not_similar_fbs = np.logical_not(are_similar_fbs.flatten()) # (?*f*j,)
+        fb_dists = np.tile(fb_dists, (1,1,1,3))
+        fb_stack = np.stack([rmtx_free_bone_uvecs, quat_free_bone_uvecs, fb_diffs, fb_dists], axis=-2) # (?,f,j,4,3)
+        not_similar_fbs = fb_stack.reshape((-1,4,3))[are_not_similar_fbs,:,:]
+        print('\n[Assert Warning] {:,} (or {:.2%}) of RMtx-Fb and Quat-Fb are not similar (norms >{})\n{}\n'.format(
+            not_similar_fbs.shape[0], not_similar_fbs.shape[0]/ are_not_similar_fbs.shape[0], 5e-04, not_similar_fbs))
+    return all_are_similar_fbs
+
 def is_rotation_matrix(R):
     # Checks if a matrix is a valid rotation matrix.
     Rt = np.transpose(R)
@@ -54,7 +67,6 @@ def is_rotation_matrix(R):
     shouldBeIdentity = np.around(shouldBeIdentity, 1)
     I = np.identity(3, dtype=R.dtype)
     n = np.linalg.norm(I - shouldBeIdentity)
-    #print('n:{}'.format(n))
     return n < 10 # 1->1mm, 0.5->0.5mm (other options: 1e-3, 1e-6)
 
 def normal_vec(vec1, vec2):
@@ -79,7 +91,6 @@ def rotation_matrix(unit_vec_a, unit_vec_b, I_mtx=np.identity(3, dtype=np.float3
     v = np.cross(unit_vec_a, unit_vec_b)
     v_mtx = np.float32([[0., -v[2], v[1]], [v[2], 0., -v[0]], [-v[1], v[0], 0.]])
     #s = np.linalg.norm(v) # sine of angle
-    #print(unit_vec_a, unit_vec_b, v, s, c, const)
     #assert (const-((1-c)/s**2)) < 1e-0, '{} vs. {}'.format(const, (1-c)/s**2) # should be equivalent
     R_mtx = I_mtx + v_mtx + np.matmul(v_mtx, v_mtx)*const
     return R_mtx
@@ -114,14 +125,6 @@ def rotation_matrix_to_xyz_euler_angles(R):
 def numpy_atan2(y_tensor, x_tensor):
     # arctan2 function is a piece-wise arctan function and is only differentiable
     # when x>0 or y!=0 see https://en.wikipedia.org/wiki/Atan2
-    # gradient when x>0 or y!=0
-    #   partial_derivative_wrt_x = -y / (x^2 + y^2)
-    #   partial_derivative_wrt_y =  x / (x^2 + y^2)
-    # gradient when x==0 and y!=0
-    #   partial_derivative_wrt_x = partial_derivative_wrt_y = 0
-    # gradient when x==0 and y==0
-    #   partial_derivative_wrt_x = partial_derivative_wrt_y = undefined (unless hard-reset to 0)
-    #print(y_tensor, x_tensor)
     x_is_zero = np.abs(x_tensor) < 1e-1
     y_is_zero = np.abs(y_tensor) < 1e-1
     assert (np.any(np.logical_not(np.logical_and(y_is_zero, x_is_zero)))), 'y-x:\n{}'.format(np.stack([y_tensor, x_tensor], axis=-1))
@@ -134,49 +137,12 @@ def numpy_cross(a_vec_tensors, b_vec_tensors):
     # a_vec_tensor-->(?,f,3)
     # b_vec_tensor-->(?,f,3)
     cross_prod_0 = np.cross(a_vec_tensors, b_vec_tensors)
-    # i_components = a_vec_tensors[:,:,1]*b_vec_tensors[:,:,2] - a_vec_tensors[:,:,2]*b_vec_tensors[:,:,1] # (?,f)
-    # j_components = a_vec_tensors[:,:,2]*b_vec_tensors[:,:,0] - a_vec_tensors[:,:,0]*b_vec_tensors[:,:,2] # (?,f)
-    # k_components = a_vec_tensors[:,:,0]*b_vec_tensors[:,:,1] - a_vec_tensors[:,:,1]*b_vec_tensors[:,:,0] # (?,f)
-    # cross_prod_1 =  np.stack([i_components, j_components, k_components], axis=2) # (?,f,3)
-    # assert (np.all(cross_prod_1==cross_prod_0)), 'cross - python:\n{}\nnumpy:\n{}'.format(cross_prod_1, cross_prod_0)
     return cross_prod_0
 
 def numpy_vecdot(a_vec_tensors, b_vec_tensors, ndims=3, vsize=3):
     # dot product of vectors in dim=2
     # equivalent to np.dot(a_vec_tensors, b_vec_tensors)
     dot_prod_0 = np.sum(a_vec_tensors * b_vec_tensors, axis=-1)
-
-    # if ndims==3:
-    #     # a_vec_tensor-->(?,f,3)
-    #     # b_vec_tensor-->(?,f,3)
-    #     dot_prod_1 = a_vec_tensors[:,:,0] * b_vec_tensors[:,:,0]
-    #     for v_comp_idx in range(1, vsize):
-    #         dot_prod_1 += a_vec_tensors[:,:,v_comp_idx] * b_vec_tensors[:,:,v_comp_idx]
-    #
-    #     b, f = b_vec_tensors.shape[:2]
-    #     dot_prod_2 = np.zeros((b,f), dtype=np.float32)
-    #     for b_idx in range(b):
-    #         for f_idx in range(f):
-    #             dot_prod_2[b_idx, f_idx] = np.dot(a_vec_tensors[b_idx, f_idx], b_vec_tensors[b_idx, f_idx])
-    #
-    # else: # ndims==4:
-    #     # a_vec_tensor-->(?,f,m,3), m=1
-    #     # b_vec_tensor-->(?,f,n,3)
-    #     dot_prod_1 = a_vec_tensors[:,:,:,0] * b_vec_tensors[:,:,:,0] + \
-    #                  a_vec_tensors[:,:,:,1] * b_vec_tensors[:,:,:,1] + \
-    #                  a_vec_tensors[:,:,:,2] * b_vec_tensors[:,:,:,2] + \
-    #                  a_vec_tensors[:,:,:,3] * b_vec_tensors[:,:,:,3]
-    #
-    #     b, f, n = b_vec_tensors.shape[:3]
-    #     dot_prod_2 = np.zeros((b,f,n), dtype=np.float32)
-    #     for b_idx in range(b):
-    #         for f_idx in range(f):
-    #             for n_idx in range(n):
-    #                 dot_prod_2[b_idx,f_idx,n_idx] = np.dot(a_vec_tensors[b_idx,f_idx,0], b_vec_tensors[b_idx,f_idx,n_idx])
-    #
-    # print('dot_prod_2.shape:{}'.format(dot_prod_2.shape))
-    # assert (np.all(np.abs(dot_prod_1-dot_prod_2)<1e-1)), 'python-vs-numpy dot product:\n{}'.format(np.stack([dot_prod_1, dot_prod_2, np.abs(dot_prod_1-dot_prod_2)<1e-3], axis=-1))
-    # assert (np.all(np.abs(dot_prod_0-dot_prod_2)<1e-1)), 'python-vs-numpy dot product:\n{}'.format(np.stack([dot_prod_0, dot_prod_2, np.abs(dot_prod_0-dot_prod_2)<1e-3], axis=-1))
     return dot_prod_0 # (?,f) or (?,f,n)
 
 def numpy_matdot(mtx_tensor, vec_tensors):
@@ -184,15 +150,8 @@ def numpy_matdot(mtx_tensor, vec_tensors):
     # equivalent to np.dot(mtx_tensor, vec_tensors.T).T
     # mtx_tensor-->(?,f,4,4)
     # vec_tensor-->(?,f,n,4)
-    #mat_dot_0 = np.transpose(np.matmul(mtx_tensor, np.transpose(vec_tensors, axes=(0,1,3,2))), axes=(0,1,3,2))
     axes = (0,1,3,2) if np.ndim(vec_tensors)==4 else (0,1,2,4,3)
     mat_dot_0 = np.transpose(np.matmul(mtx_tensor, np.transpose(vec_tensors, axes=axes)), axes=axes)
-    # row0_dot_prod = numpy_vecdot(mtx_tensor[:,:,[0],:], vec_tensors, ndims=4, vsize=4) # (?,f,n)
-    # row1_dot_prod = numpy_vecdot(mtx_tensor[:,:,[1],:], vec_tensors, ndims=4, vsize=4) # (?,f,n)
-    # row2_dot_prod = numpy_vecdot(mtx_tensor[:,:,[2],:], vec_tensors, ndims=4, vsize=4) # (?,f,n)
-    # row3_dot_prod = numpy_vecdot(mtx_tensor[:,:,[3],:], vec_tensors, ndims=4, vsize=4) # (?,f,n)
-    # mat_dot_1 = np.stack([row0_dot_prod, row1_dot_prod, row2_dot_prod, row3_dot_prod], axis=3) # (?,f,n,4)
-    # assert (np.all(np.abs(mat_dot_1-mat_dot_0)<1e-1)), 'python-vs-numpy matrix dot:\n{}'.format(np.stack([mat_dot_1, mat_dot_0, np.abs(mat_dot_1-mat_dot_0)<1e-3], axis=-1))
     return mat_dot_0
 
 
@@ -202,19 +161,6 @@ def numpy_matmul(a_mtx_tensor, b_mtx_tensor, n=3):
     # a_mtx_tensor-->(?,f,n,n)
     # b_mtx_tensor-->(?,f,n,n)
     mat_mul_0 = np.matmul(a_mtx_tensor, b_mtx_tensor)
-    # row_list, col_list = list(), list()
-    # #print('rot_mtx.shape:{}, tra_mtx.shape:{}'.format(a_mtx_tensor.shape, b_mtx_tensor.shape))
-    # for i in range(n):
-    #     for j in range(n):
-    #         mij_dot_prod = numpy_vecdot(a_mtx_tensor[:,:,i,:], b_mtx_tensor[:,:,:,j], vsize=n) # (?,f)
-    #         col_list.append(mij_dot_prod)
-    #
-    #     col_tensor = np.stack(col_list, axis=2) # (?,f,n)
-    #     row_list.append(col_tensor)
-    #     col_list.clear()
-    #
-    # mat_mul_1 = np.stack(row_list, axis=2) # (?,f,n,n)
-    # assert (np.all(np.abs(mat_mul_1-mat_mul_0)<1e-1)), 'python-vs-numpy matrix mul:\n{}'.format(np.stack([mat_mul_1, mat_mul_0, np.abs(mat_mul_1-mat_mul_0)<1e-3], axis=-1))
     return mat_mul_0
 
 
@@ -655,30 +601,34 @@ def numpy_bone_orientation_v3(quadruplet_kpts, n_samples, n_frames, xy_axis_dirs
     return transform_matrices, free_limb_uvecs, free_limb_cosines, [x_euler_angles, y_euler_angles, z_euler_angles]
 
 
-def save_jmc_priors(fb_orientation_vecs, jme_ordered_tags, n_fb_jnts, augment, group_joints,
-                    supr_subset_tag, frm_rate_tag, rbo_type, jmc_joint_config, from_torch=True):
+def save_jmc_priors(fb_orientation_vecs, jme_ordered_tags, n_fb_jnts, args,
+                    supr_subset_tag, frm_rate_tag, jmc_joint_config, from_torch=True):
     op_tag = '_tch' if from_torch else '_npy'
-    aug_tag = 'wxaug' if augment else 'nouag'
-    grp_tag = 'grpjnt' if group_joints else 'perjnt'
-    file_path = os.path.join('priors', supr_subset_tag, 'properties', 'joint_orients{}_{}_{}_{}_{}{}.pickle'.
-                             format(frm_rate_tag, rbo_type, aug_tag, n_fb_jnts, grp_tag, op_tag))
-    jme_prior_src = {'joint_align_config':jmc_joint_config, 'keypoint_indexes':KPT_2_IDX,
-                     'joint_order':jme_ordered_tags, 'group':group_joints, 'augment':augment}
+    aug_tag = 'wxaug' if args.data_augmentation else 'nouag'
+    grp_tag = 'grpjnt' if args.group_jmc else 'perjnt'
+    fbq_tag = 5 if args.quintuple else 4
+    file_path = os.path.join('priors', supr_subset_tag, 'properties', 'fbj_orients{}_{}{}_{}_{}_{}{}.pickle'.
+                        format(frm_rate_tag, args.jmc_fbo_ops_type, fbq_tag, aug_tag, n_fb_jnts, grp_tag, op_tag))
+    jme_prior_src = {'joint_align_config':jmc_joint_config, 'keypoint_indexes':KPT_2_IDX, 'q_kpt_set':fbq_tag,
+                     'joint_order':jme_ordered_tags, 'group':args.group_jmc, 'augment':args.data_augmentation}
     for joint_id, joint_orient_vecs in fb_orientation_vecs.items():
         jme_prior_src[joint_id] = np.concatenate(joint_orient_vecs, axis=0)
     pickle_write(jme_prior_src, file_path)
 
 
-def save_bone_prior_properties(proportions_metadata, bpe_ordered_tags, augment,
+def save_bone_prior_properties(proportions_metadata, bpc_ordered_tags, blen_std, augment,
                                supr_subset_tag, frm_rate_tag, n_ratios, from_torch=True):
     properties_dir = os.path.join('priors', supr_subset_tag, 'properties')
     op_tag = '_tch' if from_torch else '_npy'
     aug_tag = 'wxaug' if augment else 'nouag'
+    std_tag = '' if blen_std is None else '_blstd{}'.format(str(blen_std).replace("0.", "."))
     if len(proportions_metadata['bone_lengths'])>0:
         bone_len = np.concatenate(proportions_metadata['bone_lengths'])
         file_path = os.path.join(properties_dir, 'bone_lengths{}_16_m.npy'.format(frm_rate_tag))
         np.save(file_path, bone_len)
-        print('avg bone lengths: {}'.format(np.mean(bone_len, axis=0, keepdims=False)))
+        print('min bone lengths: {} - {} m'.format(np.min(bone_len, axis=(0,1)), np.min(bone_len)))
+        print('avg bone lengths: {} - {} m'.format(np.mean(bone_len, axis=(0,1)), np.mean(bone_len)))
+        print('max bone lengths: {} - {} m'.format(np.max(bone_len, axis=(0,1)), np.max(bone_len)))
     if len(proportions_metadata['bone_symms'])>0:
         bone_symm = np.concatenate(proportions_metadata['bone_symms'])
         file_path = os.path.join(properties_dir, 'bone_symms{}_6_m.npy'.format(frm_rate_tag))
@@ -687,32 +637,61 @@ def save_bone_prior_properties(proportions_metadata, bpe_ordered_tags, augment,
     if len(proportions_metadata['bone_ratios'])>0:
         bone_ratio = np.concatenate(proportions_metadata['bone_ratios'])
         assert (n_ratios==bone_ratio.shape[-1]), '{} vs. {}'.format(n_ratios, bone_ratio.shape[-1])
-        bpe_prior_src = {'bone_ratios':bone_ratio,
-                         'keypoint_indexes':KPT_2_IDX, 'bone_kpt_pairs':BONE_KPT_PAIRS,
-                         'ratio_order':bpe_ordered_tags, 'augment':augment,
+        bpc_prior_src = {'bone_ratios':bone_ratio, 'keypoint_indexes':KPT_2_IDX, 'bone_kpt_pairs':BONE_KPT_PAIRS,
+                         'ratio_order':bpc_ordered_tags, 'augment':augment, 'induced_blen_std': blen_std,
                          'rgt_sym_bones':RGT_SYM_BONES, 'lft_sym_bones':LFT_SYM_BONES}
-        file_path = os.path.join(properties_dir, 'bone_ratios_{}_{}{}_m{}.pickle'.
-                                 format(aug_tag, n_ratios, frm_rate_tag, op_tag))
-        pickle_write(bpe_prior_src, file_path)
-        #print('avg bone proportion ratio:\n{}'.format(np.mean(bone_ratio, axis=0, keepdims=False)))
+        file_path = os.path.join(properties_dir, 'bone_ratios_{}{}_{}{}_m{}.pickle'.
+                                 format(aug_tag, std_tag, n_ratios, frm_rate_tag, op_tag))
+        pickle_write(bpc_prior_src, file_path)
+        print('avg bone proportion ratio:\n{}'.format(np.mean(bone_ratio, axis=0, keepdims=False)))
+
+
+def save_pose_structure_prior_properties(pose_metadata, fb_orientation_vecs, jm_boa_config, args, jm_ordered_tags,
+                bp_ordered_tags, sym_ordered_tags, n_fb_jnts, n_bp_bones, blen_std, supr_subset_tag, frm_rate_tag,
+                from_torch=True):
+    op_tag = '_tch' if from_torch else '_npy'
+    aug_tag = 'wxaug' if args.data_augmentation else 'nouag'
+
+    # Save joint-mobility bone-orientation-alignment properties
+    grp_tag = 'grpjnt' if args.group_jmc else 'perjnt'
+    fbq_tag = 5 if args.quintuple else 4
+    file_path = os.path.join('priors', supr_subset_tag, 'properties', 'RP-BoneOrient{}_{}{}_{}_{}_{}{}.pickle'.
+                             format(frm_rate_tag, args.jmc_fbo_ops_type, fbq_tag, aug_tag, n_fb_jnts, grp_tag, op_tag))
+    jme_prior_src = {'joint_align_config':jm_boa_config, 'keypoint_indexes':KPT_2_IDX, 'q_kpt_set':fbq_tag,
+                     'joint_order':jm_ordered_tags, 'group':args.group_jmc, 'augment':args.data_augmentation}
+    for joint_id, joint_orient_vecs in fb_orientation_vecs.items():
+        jme_prior_src[joint_id] = np.concatenate(joint_orient_vecs, axis=0)
+    pickle_write(jme_prior_src, file_path)
+
+    # Save other pose structure properties (pose location and orientation, torso length, bone symmetry and proportions)
+    pose_locat = np.concatenate(pose_metadata['pose_locat'], axis=0)
+    pose_orien = np.concatenate(pose_metadata['pose_orients'], axis=0)
+    bone_symms = np.concatenate(pose_metadata['bone_symms'], axis=0)
+    bone_ratio = np.concatenate(pose_metadata['b2t_ratios'], axis=0)
+    torso_lens = np.concatenate(pose_metadata['torso_lens'], axis=0)
+
+    std_tag = '' if blen_std is None else '_blstd{}'.format(str(blen_std).replace("0.", "."))
+    assert (n_bp_bones==bone_ratio.shape[-1]), '{} vs. {}'.format(n_bp_bones, bone_ratio.shape[-1])
+    file_path = os.path.join('priors', supr_subset_tag, 'properties', 'RP-PoseStruct{}_{}{}_{}_m{}.pickle'.
+                             format(frm_rate_tag, aug_tag, std_tag, n_bp_bones, op_tag))
+    bpc_prior_src = {'bone_ratios':bone_ratio, 'keypoint_indexes':KPT_2_IDX, 'symm_order':sym_ordered_tags,
+                     'ratio_order':bp_ordered_tags, 'augment':args.data_augmentation, 'induced_blen_std': blen_std,
+                     'rgt_sym_bones':RGT_SYM_BONES, 'ctr_bones':CENTERD_BONES, 'lft_sym_bones':LFT_SYM_BONES,
+                     'bone_symms':bone_symms, 'torso_lens':torso_lens, 'pose_locat':pose_locat, 'pose_orien':pose_orien}
+
+    pickle_write(bpc_prior_src, file_path)
+
+    print('torso lengths: {:6.4f} {:6.4f} {:6.4f} m'.format(np.min(torso_lens), np.mean(torso_lens), np.max(torso_lens)))
+    print('avg bone symmetry normalized diff: {}'.format(np.mean(bone_symms, axis=(0,1), keepdims=False)))
+    print('avg bone proportion ratio: {}'.format(np.mean(bone_ratio, axis=(0,1), keepdims=False)))
 
 
 def np_orthographic_projection(poses_3d):
     assert (poses_3d.shape[1:] == (1, 17, 3)), 'poses_3d.shape:{}'.format(poses_3d.shape) # (?,f,17,3)
-    #x_lft = np.amin(poses_3d[:,:,:,0], axis=-1, keepdims=True) # (?,f,17) -> (?,f,1) #*!
-    #x_rgt = np.amax(poses_3d[:,:,:,0], axis=-1, keepdims=True) # (?,f,17) -> (?,f,1) #*!
-    #y_top = np.amin(poses_3d[:,:,:,1], axis=-1, keepdims=True) # (?,f,17) -> (?,f,1) #*!
-    #y_bot = np.amax(poses_3d[:,:,:,1], axis=-1, keepdims=True) # (?,f,17) -> (?,f,1) #*!
-    #z_nea = np.amin(poses_3d[:,:,:,2], axis=-1, keepdims=True) # (?,f,17) -> (?,f,1) #*!
-    #z_far = np.amax(poses_3d[:,:,:,2], axis=-1, keepdims=True) # (?,f,17) -> (?,f,1) #*!
     projection_mtx = np.zeros(poses_3d.shape[:-1]+(4,4), dtype=np.float32) # (?,f,17,4,4)
     projection_mtx[:,:,:,0,0] =  1 # 2 / (x_rgt - x_lft) #*!
     projection_mtx[:,:,:,1,1] =  1 # 2 / (y_top - y_bot) #*!
-    #projection_mtx[:,:,:,2,2] =  -2 / (z_far - z_nea) #*!
     projection_mtx[:,:,:,3,3] =  1
-    #projection_mtx[:,:,:,0,3] = -(x_rgt + x_lft) / (x_rgt - x_lft) #*!
-    #projection_mtx[:,:,:,1,3] = -(y_top + y_bot) / (y_top - y_bot) #*!
-    #projection_mtx[:,:,:,2,3] = -(z_far + z_nea) / (z_far - z_nea) #*!
     homg_ones = np.ones(poses_3d.shape[:-1]+(1,), dtype=np.float32) # (?,f,17,1)
     homg_3d_poses = np.concatenate([poses_3d, homg_ones], axis=-1) # (?,f,17,4)
     homg_3d_poses = np.expand_dims(homg_3d_poses, axis=4) # (?,f,17,4,1)
@@ -808,6 +787,7 @@ def quaternion_rotate(pose3d, q1, q2, pvt_kpt):
     # translate pose to origin first
     vpose = pose3d - pvt_kpt
     vpose = qv_mult_v2(q1, vpose)
-    return qv_mult_v2(q2, vpose)
+    vpose = qv_mult_v2(q2, vpose)
+    return vpose
 
 

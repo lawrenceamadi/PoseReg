@@ -3,32 +3,28 @@
 # @Author  : Lawrence A.
 # @Email   : lamadi@hawk.iit.edu
 # @File    : visuals.py
-# @Software: videopose3d
+# @Software: pose.reg
 
-import os
 import sys
 import matplotlib
-import numpy as np
-from tabulate import tabulate
 from sklearn.covariance import empirical_covariance
 from sklearn.covariance import MinCovDet, EmpiricalCovariance
 
 sys.path.append('../')
-from agents.helper import *
 from agents.pose_regs import *
 
 # Added by Lawrence (04/14/2021) for cross OS compatibility
 gui_env = ['TKAgg','GTKAgg','Qt4Agg','WXAgg','Agg']
 for gui in gui_env:
     try:
-        #print("testing", gui)
         matplotlib.use(gui, warn=False, force=True)
         from matplotlib import pyplot as plt
         break
     except:
         continue
-#print("Using:",matplotlib.get_backend())
+
 from mpl_toolkits import mplot3d # <--- This is important for 3d plotting
+from matplotlib import animation
 
 
 
@@ -43,13 +39,14 @@ def inlier_subset(data_pts, pts_distance):
     return cluster_inlier_pts, n_inliers/len(cluster_inlier_pts), inlier_indexes
 
 
-def plot_2d_pose(points2d, sp_tag, kpt_2_idx, axis_len=1.0, display=True, overlay=False, thickness=2.0):
+def plot_2d_pose(points2d, sp_tag, kpt_2_idx, fig_title='Normalized 2D Pose',
+                 axis_len=0.75, display=True, overlay=False, thickness=2.0):
     n_ps = len(points2d)
     n_sf = len(points2d)+1 if overlay else len(points2d)
     n_lp = len(points2d)+2 if overlay else len(points2d)
     if overlay: sp_tag += ['Overlay']
-    sp_fig, sp_axes = plt.subplots(nrows=1, ncols=n_sf, figsize=(n_sf*5, 5))
-    sp_fig.suptitle('Normalized 2D Pose', y=1., fontweight='bold', size=12)
+    sp_fig, sp_axes = plt.subplots(nrows=1, ncols=n_sf, figsize=(n_sf*6, 5))
+    sp_fig.suptitle(fig_title, y=1., fontweight='bold', size=12)
 
     for i in range(n_lp):
         if n_sf==1: sp_axs = sp_axes
@@ -62,7 +59,6 @@ def plot_2d_pose(points2d, sp_tag, kpt_2_idx, axis_len=1.0, display=True, overla
             sp_axs.set_title(sp_tag[i], fontweight='bold', size=10)
             sp_axs.set(xlim=(-axis_len,axis_len), ylim=(-axis_len,axis_len))
             sp_axs.set_yticklabels([]), sp_axs.set_xticklabels([]) # turn off tick labels
-            #sp_axs.set_box_aspect(aspect=(1,1,1))
             # Draw x,y axis across frame(cartesian coordinate) origin
             sp_axs.plot([-axis_len,0], [0,0], 'red',  linestyle='-.', linewidth=0.6) # - x-axis
             sp_axs.plot([0, axis_len], [0,0], 'red',  linestyle='--', linewidth=1.2) # + x-axis
@@ -70,8 +66,8 @@ def plot_2d_pose(points2d, sp_tag, kpt_2_idx, axis_len=1.0, display=True, overla
             sp_axs.plot([0,0], [0, axis_len], 'blue', linestyle='--', linewidth=1.2) # + y-axis
 
         j = i
-        if i==n_ps: j, color, thickness = i-1, 'olive', 3.0 # i-1 or 3
-        elif i==n_sf: j, color, thickness = i-3, 'black', 1.0 # i-3 or 2
+        if i==n_ps: j, color, thickness = i-1, 'royalblue', 3.0 # i-1 or 3
+        elif i==n_sf: j, color, thickness = i-3, 'black', 1.5 # i-3 or 2
         xKpts = points2d[j][:, 0]
         yKpts = points2d[j][:, 1]
 
@@ -93,20 +89,22 @@ def plot_2d_pose(points2d, sp_tag, kpt_2_idx, axis_len=1.0, display=True, overla
         plt.close(sp_fig)
 
 
-def plot_3d_pose(points3d, sp_fig, sp_axs, sp_tag, kpt_2_idx, jnt_quad_kpts, axis_len=0.75, t_tag='', display=False):
+def plot_3d_pose(points3d, sp_fig, sp_axs, sp_tag, kpt_2_idx, jnt_quad_kpts, axis_len=0.75,
+                 t_tag='', azim_deg=30, elev_deg=30, clear=True, uni_color=False, display=False):
     # draw y-component on z-axis and z-component on y-axis (xyz min:-890 max:913)
+    if sp_fig is None and sp_axs is None:
+        sp_fig, sp_axs = plt.subplots(1, 1, subplot_kw={'projection':'3d'}, figsize=(5,5))
     xKpts = points3d[:, 0]
     yKpts = points3d[:, 1]
     zKpts = points3d[:, 2]
-    fig_title = '{}3D Pose in Individual Joint Frames or Cartesian Coordinates'.format(t_tag)
+    fig_title = '{}3D Pose Transformation for Each Bone Alignment'.format(t_tag)
     sp_fig.suptitle(fig_title, y=1., fontweight='bold', size=12)
-    sp_axs.clear()
+    if clear: sp_axs.clear()
     sp_axs.set_title(sp_tag, fontweight='bold', size=10)
     sp_axs.set(#xlabel='x', ylabel='y', zlabel='z', # components order x-y-z
                xlim=(-axis_len,axis_len), zlim=(-axis_len,axis_len), ylim=(-axis_len,axis_len))
     sp_axs.set_yticklabels([]), sp_axs.set_xticklabels([]), sp_axs.set_zticklabels([]) # turn off tick labels
-    sp_axs.view_init(azim=30, vertical_axis='y') # Defaults: elev=30, azim=-60, roll=0, vertical_axis='z'
-    #print('3D plot angles - elevation:{} azimuth:{} roll:{}'.format(sp_axs.elev, sp_axs.azim, sp_axs.roll))
+    sp_axs.view_init(azim=azim_deg, elev=elev_deg, vertical_axis='y') # Defaults: elev=30 azim=-60 roll=0 vertical_axis='z'
     sp_axs.set_box_aspect(aspect=(1,1,1))
 
     # Draw x,y,z axis across frame(cartesian coordinate) origin
@@ -121,42 +119,43 @@ def plot_3d_pose(points3d, sp_fig, sp_axs, sp_tag, kpt_2_idx, jnt_quad_kpts, axi
     for limb, kptPair in BONE_KPT_PAIRS.items():
         kptA, kptB = kptPair
         # color based on right, left, or center body part
-        if kptA[0]=='R' or kptB[0]=='R': color = 'olive'
+        if uni_color: color = 'midnightblue'
+        elif kptA[0]=='R' or kptB[0]=='R': color = 'olive'
         elif kptA[0]=='L' or kptB[0]=='L': color = 'purple'
         else: color = 'black'
+        thickness = 3.0 if uni_color else 1.5
         kptAIdx, kptBIdx = kpt_2_idx[kptA], kpt_2_idx[kptB]
         x_pts = [xKpts[kptAIdx], xKpts[kptBIdx]]
         y_pts = [yKpts[kptAIdx], yKpts[kptBIdx]]
         z_pts = [zKpts[kptAIdx], zKpts[kptBIdx]]
-        sp_axs.plot(x_pts, y_pts, z_pts, color, zdir='z', linewidth=2.0)
+        sp_axs.plot(x_pts, y_pts, z_pts, color, zdir='z', linewidth=thickness)
 
     # Use Dots to identify quad-kpts
     if np.all(np.array(jnt_quad_kpts)>=0):
-        jnt_quad_kpts = [jnt_quad_kpts[i] for i in [0,2,1,3]] # switch out axis_kpt with free_kpt
         sp_axs.scatter3D(xKpts[jnt_quad_kpts], yKpts[jnt_quad_kpts], zKpts[jnt_quad_kpts], alpha=1.0, s=20., c='black')
         sp_axs.scatter3D(xKpts[jnt_quad_kpts], yKpts[jnt_quad_kpts], zKpts[jnt_quad_kpts], alpha=1.0, s=10.,
-                         c=['tab:gray', 'tab:pink', 'tab:blue', 'tab:green'])
+                         c=['tab:gray', 'tab:blue', 'tab:pink', 'tab:green'])
 
     if display:
         plt.show(block=True)
         plt.close(sp_tag)
 
 
-def render_joint_mobility(joint_name, data_points, point_color_wgts, title, prop_tag, tags, wgt_range,
-                          dtg, sp_axs, sp_fig, fig_dir, axis_lim=(-1,1), alpha=1.0, change_view=False,
-                          plot_axis=True, activate_fig=False, save_fig=True, display=False):
+def render_joint_mobility(joint_name, data_points, point_color_wgts, title, prop_tag, tags, wgt_range, dtg,
+                          sp_axs, sp_fig, fig_dir, axis_lim=(-1,1), z_lim=None, alpha=1.0, view_azim=30,
+                          change_view=False, plot_axis=True, activate_fig=False, save_fig=True, display=False):
 
-    op_tag, grp_tag, wgt_tag = tags
     if activate_fig: plt.figure(prop_tag)
     sp_fig.suptitle('{} with Non-max Suppression (d={})'.format(title, dtg), y=1., fontweight='bold', size=10)
 
     sp_axs.clear()
     sp_axs.set_title(joint_name, fontweight='bold', size=10)
-    sp_axs.set(xlim=axis_lim, zlim=axis_lim, ylim=axis_lim) #, xlabel='x', ylabel='y', zlabel='z')
+    z_axis_lim = axis_lim if z_lim is None else z_lim
+    sp_axs.set(xlim=axis_lim, zlim=z_axis_lim, ylim=axis_lim) #, xlabel='x', ylabel='y', zlabel='z')
     sp_axs.set_yticklabels([]), sp_axs.set_xticklabels([]), sp_axs.set_zticklabels([])
-    #if change_view: sp_axs.view_init(elev=None, azim=-120) # Defaults: elev=30, azim=-60
+    # if change_view: sp_axs.view_init(elev=None, azim=-120) # Defaults: elev=30, azim=-60
     vc = -1 if change_view else 1
-    sp_axs.view_init(azim=30*vc, vertical_axis='y') # Defaults: elev=30, azim=-60, roll=0, vertical_axis='z'
+    sp_axs.view_init(azim=view_azim*vc, vertical_axis='y') # Defaults: elev=30, azim=-60, roll=0, vertical_axis='z'
     sp_axs.set_box_aspect(aspect=(1,1,1))
 
     # Draw axis
@@ -181,46 +180,12 @@ def render_joint_mobility(joint_name, data_points, point_color_wgts, title, prop
     sp_axs.scatter3D(x, y, z, c=point_color_wgts, vmin=wgt_range[0], vmax=wgt_range[1], cmap='viridis', alpha=alpha)
 
     if save_fig:
-        plt.savefig(os.path.join(fig_dir, '{}_{}_{}{}{}.png'.format(grp_tag, prop_tag, wgt_tag, op_tag, dtg)))
+        op_tag, grp_tag, wgt_tag, dup_tag = tags
+        plt.savefig(os.path.join(fig_dir, '{}_{}_{}{}{}{}.png'.format(grp_tag, prop_tag, wgt_tag, op_tag, dup_tag, dtg)))
     if display:
         plt.show(block=True)
         plt.close(prop_tag)
 
-def plot_histogram(joint_name, type, euler_angle, data_points, bin_grp_meta,
-                   v_lines, sp_axs, sp_fig, bins, x_lim, x_ticks, save=False):
-    n_bins = bins if isinstance(bins, int) else len(bins)-1
-    sp_fig.suptitle('{} {} Angles Histogram (n_bins={})'.format(joint_name, type, n_bins), y=1.1)
-    fig_title = '{} - ctr:{:.3f}, span:{:.3f}'.format(euler_angle, bin_grp_meta[0], bin_grp_meta[1])
-    sp_axs.clear()
-    sp_axs.set(title=fig_title, xlim=x_lim)
-    sp_axs.set_xticks(x_ticks)
-    sp_axs.hist(data_points, bins=bins, density=True, log=True)
-    for x_comp in v_lines:
-        sp_axs.vlines(x_comp, 0, 1, color='red', linestyles='dashed')
-    sp_axs.grid(True)
-
-    sp_fig.tight_layout(pad=5.0)
-    if save:
-        plt.savefig('../images/histograms/{}_{}_hist.png'.format(type, joint_name))
-
-def histogram_plots(prop_tag, data_points, data_summary, title, prefix, fig_tag, sp_fig, sp_axs,
-                    n_bins=10, value_range=None, sub_ticks=2, activate_fig=False, display=False):
-    '''Plot 3 histogram plots for bone ratios, likelihood, and log-likelihood'''
-    if activate_fig: plt.figure(fig_tag)
-    sp_fig.suptitle(title, y=1., fontweight='bold', size=10)
-    fig_title = '{}\n[{:.2f} - {:.2f} - {:.2f} - {:.4f}]'.\
-                    format(prop_tag, data_summary[0], data_summary[1], data_summary[2], data_summary[3])
-
-    sp_axs.clear()
-    sp_axs.set_title(fig_title, fontweight='bold', size=9)
-    sp_axs.set_xticks(np.arange(value_range[0], value_range[1]+1e-5, (value_range[1]-value_range[0])/(n_bins/sub_ticks)))
-    sp_axs.hist(data_points, bins=n_bins, density=True, log=True, range=value_range, histtype='step')
-
-    sp_fig.tight_layout(pad=5.0)
-    plt.savefig('../images/{}_{}.png'.format(prefix, fig_tag))
-    if display:
-        plt.show(block=True)
-        plt.close(fig_tag)
 
 def get_tail_vlines(x_points, data_points, vline_ymin):
     lft_x_min_idx = np.argmax(np.where(data_points>=vline_ymin, 1, 0))
@@ -286,60 +251,25 @@ def line_plots(prop_tag, x_points, data_points, vline_ymin, title, prefix, fig_t
         plt.show(block=True)
         plt.close(fig_tag)
 
-def empty_bin_span(data, bins):
-    found_empty_bin = False
-    first_empty_bin_min = 0
-    last_empty_bin_max = 0
-    for e_in in range(1, len(bins)):
-        bin_s_val = bins[e_in-1]
-        bin_e_val = bins[e_in]
-        if e_in==(len(bins-1)):
-            vals_in_bin = np.logical_and(data>=bin_s_val, data<=bin_e_val)
-        else: vals_in_bin = np.logical_and(data>=bin_s_val, data<bin_e_val)
-        n_vals_in_bin = np.sum(np.where(vals_in_bin, 1, 0))
 
-        if n_vals_in_bin<=0:
-            if not found_empty_bin:
-                first_empty_bin_min = bin_s_val
-                last_empty_bin_max = bin_e_val
-                found_empty_bin = True
-            else:
-                last_empty_bin_max = bin_e_val
+def get_1d_priors(samples, log_spread):
+    mean_mu = np.mean(samples) # (1,)
+    variance_sigma = np.var(samples) # (1,)
 
-    empty_center = (first_empty_bin_min + last_empty_bin_max) / 2
-    empty_range = (last_empty_bin_max - first_empty_bin_min) / 2
-    return first_empty_bin_min, last_empty_bin_max, empty_center, empty_range
+    # computing data point weights as the likelihood via the probability density function
+    likelihood = probability_density_func(samples, mean_mu, variance_sigma)
+    likelihood_min, likelihood_max = np.min(likelihood), np.max(likelihood)
+    log_lihood = log_stretch(likelihood, spread=log_spread)  # 1e-5->1e-3->1e-1
+    log_lihood_min, log_lihood_max = np.min(log_lihood), np.max(log_lihood)
+    log_lihood_mean, log_lihood_std, log_lihood_var = np.mean(log_lihood), np.std(log_lihood), np.var(log_lihood)
 
-def heavy_bin_span(data, bins):
-    # assumes there is no gap (empty-bin) separating heavy (valid bin containing values) bins
-    found_heavy_bin = False
-    first_heavy_bin_min = 0
-    last_heavy_bin_max = 0
-    for e_in in range(1, len(bins)):
-        bin_s_val = bins[e_in-1]
-        bin_e_val = bins[e_in]
-        if e_in==(len(bins-1)):
-            vals_in_bin = np.logical_and(data>=bin_s_val, data<=bin_e_val)
-        else: vals_in_bin = np.logical_and(data>=bin_s_val, data<bin_e_val)
-        n_vals_in_bin = np.sum(np.where(vals_in_bin, 1, 0))
-
-        if n_vals_in_bin>0:
-            if not found_heavy_bin:
-                first_heavy_bin_min = bin_s_val
-                last_heavy_bin_max = bin_e_val
-                found_heavy_bin = True
-            else:
-                last_heavy_bin_max = bin_e_val
-
-    heavy_center = (first_heavy_bin_min + last_heavy_bin_max) / 2
-    heavy_range = (last_heavy_bin_max - first_heavy_bin_min) / 2
-    return first_heavy_bin_min, last_heavy_bin_max, heavy_center, heavy_range
+    return mean_mu, variance_sigma, likelihood_min, likelihood_max, \
+           log_lihood_min, log_lihood_max, log_lihood_mean, log_lihood_std
 
 
-def sv_pdf_value_likelihood_viz(subset, proportion_file, n_ratios, property=('bpe','Bones-Ratio'),
-                                frt_tag='', op_tag='_tch', augment=True, grp_props=True, dom_prop_step=0.0001, log_spread=1.,
-                                #n_rows=3, n_cols=5, plot_hists=False,
-                                plot_property_range=True, fmt=".7f"):
+def sv_pdf_value_likelihood_viz(subset, proportion_file, n_ratios, blen_std, property=('bpe','Bones-Ratio'),
+                                frt_tag='', op_tag='_tch', augment=True, grp_props=False, log_spread=1.,
+                                dom_prop_step=0.0001, plot_property_range=True, fmt=".7f"):
     # single-variate probability-density-function value derived likelihood (BSE & BPE)
     # Computes the probability density for the single-variate 'normal' distribution of bone proportions
     # from mean (1,) and variance (1,) per bone ratios.
@@ -347,14 +277,16 @@ def sv_pdf_value_likelihood_viz(subset, proportion_file, n_ratios, property=('bp
     properties_logged = {}
     bpe_priors_params = {'br_mean_variance':{}, 'br_logli_metadata':{}, 'summary_log':''}
     aug_tag = 'wxaug' if augment else 'nouag'
+    std_tag = 'blstd{}'.format(str(blen_std).replace("0.", "."))
     grp_tag = 'grpprp' if grp_props and n_ratios!=114 else 'perprp'
     subset_dir = os.path.join('../priors', subset)
-    bone_prior_property_file = proportion_file.format(aug_tag, n_ratios, frt_tag, op_tag)
-    bone_prior_params_file = 'bone_priors_{}_{}{}_br_{}_{:.0e}.pickle'.format(aug_tag, n_ratios, frt_tag, grp_tag, log_spread)
-    bone_prior_figure_dir = 'bp_{}{}_ls{:.0e}'.format(n_ratios, frt_tag, log_spread)
+    bone_prior_property_file = proportion_file.format(aug_tag, std_tag, n_ratios, frt_tag, op_tag)
+    bone_prior_params_file = 'br_prior_params_{}_{}_{}{}_{}_{:.0e}.pickle'\
+                                .format(std_tag, aug_tag, n_ratios, frt_tag, grp_tag, log_spread)
+    bone_prior_figure_dir = 'bp_{}{}{}_ls{:.0e}'.format(n_ratios, frt_tag, std_tag, log_spread)
 
     if log_spread==1.:
-        meta_range, meta_subticks = [(0., 1.4), (0, 28), (0, 3.5), (-8,2)], [2, 5, 5, 5] # [(0.2,1.2),,(0,11),(0,11)], []
+        meta_range, meta_subticks = [(0., 1.2), (0, 20), (0, 3.5), (-8,2)], [2, 5, 5, 5] # [(0.2,1.2),,(0,11),(0,11)], []
     else: meta_range, meta_subticks = [(0., 1.4), (0, 28), (0, 11), (-8,2)], [2, 5, 5, 5]
     prop_range = meta_range[0]
     dom_proportion = np.arange(prop_range[0], prop_range[1]+dom_prop_step, dom_prop_step)
@@ -362,6 +294,7 @@ def sv_pdf_value_likelihood_viz(subset, proportion_file, n_ratios, property=('bp
     bpe_prior_src = pickle_load(os.path.join(subset_dir, 'properties', bone_prior_property_file))
     ordered_bone_prop_tags = bpe_prior_src['ratio_order']
     bpe_priors_params['ratio_order'] = ordered_bone_prop_tags
+    bpe_priors_params['induced_blen_std'] = bpe_prior_src['induced_blen_std']
     bpe_priors_params['keypoint_indexes'] = bpe_prior_src['keypoint_indexes']
     bpe_priors_params['bone_kpt_pairs'] = bpe_prior_src['bone_kpt_pairs']
     bpe_priors_params['rgt_sym_bones'] = bpe_prior_src['rgt_sym_bones']
@@ -383,10 +316,7 @@ def sv_pdf_value_likelihood_viz(subset, proportion_file, n_ratios, property=('bp
         component_tags = list(set(component_tags))
     else: component_tags = ordered_bone_prop_tags
 
-    #first_plot_idx = 0 if plot_hists else 4
-    #SPS_FIG, SPS_AXS, FIG_IDS = [None]*8, [None]*8, ['prop','pdf','log','dlog','pdfl','msnl','mmsn','ilmw']
-    #SPS_FIG, SPS_AXS, FIG_IDS = SPS_FIG[first_plot_idx:], SPS_AXS[first_plot_idx:], FIG_IDS[first_plot_idx:]
-    SPS_FIG, SPS_AXS, FIG_IDS = [None]*4, [None]*4, ['pdfl','msnl','mmsn','ilmw']
+    SPS_FIG, SPS_AXS, FIG_IDS = [None]*5, [None]*5, ['pdfl','lkli','msnl','mmsn','ilmw']
     n_rows, n_cols = prop_fig_rowvcol[len(component_tags)]
     for i in range(len(FIG_IDS)):
         SPS_FIG[i], SPS_AXS[i] = \
@@ -456,7 +386,6 @@ def sv_pdf_value_likelihood_viz(subset, proportion_file, n_ratios, property=('bp
 
         properties_logged[comp_tag] = (likelihood_min, log_lihood_min, msnl_logli_min, mmsn_logli_min, ilmw_logli_min,
                                        dom_likelihood, dom_log_lihood, dom_msnl_logli, dom_mmsn_logli, dom_ilmw_logli)
-        #metadata = [proportion_x, likelihood, log_lihood, dom_log_lihood, msnl_logli, mmsn_logli, ilmw_logli]
         meta_max = np.asarray(
             [[proportion_max, likelihood_max, log_lihood_max, msnl_logli_max, mmsn_logli_max, ilmw_logli_max],
              [dom_proportion_max, dom_likelihood_max, dom_log_lihood_max, dom_msnl_logli_max, dom_mmsn_logli_max, dom_ilmw_logli_max]])
@@ -498,7 +427,8 @@ def sv_pdf_value_likelihood_viz(subset, proportion_file, n_ratios, property=('bp
             sp_comp_tag = comp_tag.format('')
             likelihood_min, log_lihood_min, msnl_logli_min, mmsn_logli_min, ilmw_logli_min, \
             dom_likelihood, dom_log_lihood, dom_msnl_logli, dom_mmsn_logli, dom_ilmw_logli = properties_logged[comp_tag]
-            norm_meta_data = [((dom_log_lihood, dom_msnl_logli), (log_lihood_min, msnl_logli_min)),
+            norm_meta_data = [((dom_log_lihood, dom_likelihood), (log_lihood_min, likelihood_min)),
+                              ((dom_log_lihood, dom_msnl_logli), (log_lihood_min, msnl_logli_min)),
                               ((dom_log_lihood, dom_mmsn_logli), (log_lihood_min, mmsn_logli_min)),
                               ((dom_log_lihood, dom_ilmw_logli), (log_lihood_min, ilmw_logli_min))]
             row_idx, col_idx = c_idx//n_cols, c_idx%n_cols
@@ -508,14 +438,15 @@ def sv_pdf_value_likelihood_viz(subset, proportion_file, n_ratios, property=('bp
             sps_axs_i = SPS_AXS[fig_idx][row_idx,col_idx] if n_rows>1 else SPS_AXS[fig_idx][col_idx]
             line_plots(sp_comp_tag, dom_proportion, dom_likelihood, likelihood_min, title, grp_tag, FIG_IDS[fig_idx],
                        SPS_FIG[fig_idx], sps_axs_i, fig_dir, meta_range[0], meta_range[1], activate_fig=True)
-            for t_idx in range(3):
+            for t_idx in range(len(norm_meta_data)):
                 fig_idx = first_line_plot_idx+t_idx+1
                 title = 'LogLihood (Red-Left) and {}-Loglihood (Blue-Right) Values for Bone-Ratio' \
                         ' [{} - LogSpred:{}]'.format(FIG_IDS[fig_idx].upper(), subset, log_spread)
                 sps_axs_i = SPS_AXS[fig_idx][row_idx,col_idx] if n_rows>1 else SPS_AXS[fig_idx][col_idx]
+                y_range = meta_range[2:] if t_idx>0 else meta_range[1:3]
                 twin_axis_line_plots(sp_comp_tag, dom_proportion, norm_meta_data[t_idx], title, grp_tag, FIG_IDS[fig_idx],
-                                     SPS_FIG[fig_idx], sps_axs_i, fig_dir, meta_range[0], meta_range[2:], activate_fig=True,
-                                     twin_y=t_idx==0, display=(c_idx==len(component_tags)-1 and t_idx==2))
+                                     SPS_FIG[fig_idx], sps_axs_i, fig_dir, meta_range[0], y_range, activate_fig=True,
+                                     twin_y=t_idx==1, display=(c_idx==len(component_tags)-1 and t_idx==3))
 
     for idx, set_name in enumerate(['All-Global', 'All-Global Domain']):
         summary_table = tabulate([[property[1], log_global_min[idx,0], log_global_max[idx,0]],
@@ -528,25 +459,252 @@ def sv_pdf_value_likelihood_viz(subset, proportion_file, n_ratios, property=('bp
         print('\n{}'.format(summary_table))
 
 
-def mv_pdf_fbvec_likelihood_viz(subset='S1.S5.S6.S7.S8', n_fbs=12, op_tag='_tch', frt_tag='', cov_type='noctr',
-                                assume_ctr=True, augment=True, grp_jnts=True, rbo_type='rmtx', log_spread=1.,
-                                cross_plot_wgt=True, dom_angle_step=1, fmt=".7f"):
+def pdf_likelihood_combo_viz(subset, proportion_file, n_ratios, blen_std, property=('bpe','Bones-Ratio'),
+                                frt_tag='', op_tag='_tch', augment=True, grp_props=False, log_spread=1.,
+                                dom_prop_step=0.0001, plot_properties=True, fmt=".7f"):
+    # single-variate probability-density-function value derived likelihood (BSE & BPE)
+    # Computes the probability density for the single-variate 'normal' distribution of bone proportions
+    # from mean (1,) and variance (1,) per bone ratios.
+    print('{} for {}\n'.format(property[1], property[0]))
+    properties_logged = {}
+    rpps_priors_params = {'br_mean_variance':{}, 'br_logli_metadata':{},
+                         'bsym_mean_variance':{}, 'bsym_logli_metadata':{},
+                         'tlen_mean_variance':{}, 'tlen_logli_metadata':{}, 'summary_log':'',
+                         'ploc_covariance':{}, 'ploc_inv_covariance':{}, 'ploc_axes_means':{},
+                         'pori_covariance':{}, 'pori_inv_covariance':{}, 'pori_axes_means':{}}
+    aug_tag = 'wxaug' if augment else 'nouag'
+    std_tag = 'blstd{}'.format(str(blen_std).replace("0.", "."))
+    grp_tag = 'grpprp' if grp_props and n_ratios!=114 else 'perprp'
+    subset_dir = os.path.join('../priors', subset)
+    bone_prior_property_file = proportion_file.format(aug_tag, std_tag, n_ratios, frt_tag, op_tag)
+    bone_prior_params_file = 'rpps_prior_params_{}_{}_{}{}_{}_{:.0e}.pickle' \
+        .format(std_tag, aug_tag, n_ratios, frt_tag, grp_tag, log_spread)
+    bone_prior_figure_dir = 'rpps_{}{}{}_ls{:.0e}'.format(n_ratios, frt_tag, std_tag, log_spread)
+    non_br_header = ['Symm Pair', 'Likelihood-Min', 'Likelihood-Max', 'LogLikeli-Min', 'LogLikeli-Max', 'Mean', 'Variance']
+
+    meta_range, meta_subticks = [(0., 1.2), (0, 30), (0, 3.5), (-8,2)], [2, 5, 5, 5]
+    prop_range = meta_range[0]
+    dom_proportion = np.arange(prop_range[0], prop_range[1]+dom_prop_step, dom_prop_step)
+
+    bpe_prior_src = pickle_load(os.path.join(subset_dir, 'properties', bone_prior_property_file))
+    ordered_bone_prop_tags = bpe_prior_src['ratio_order']
+    rpps_priors_params['ratio_order'] = ordered_bone_prop_tags
+    rpps_priors_params['induced_blen_std'] = bpe_prior_src['induced_blen_std']
+    rpps_priors_params['keypoint_indexes'] = bpe_prior_src['keypoint_indexes']
+    ordered_symm_bone_pairs = bpe_prior_src['symm_order']
+    rpps_priors_params['symm_order'] = ordered_symm_bone_pairs
+    rpps_priors_params['rgt_sym_bones'] = bpe_prior_src['rgt_sym_bones']
+    rpps_priors_params['lft_sym_bones'] = bpe_prior_src['lft_sym_bones']
+    rpps_priors_params['ctr_bones'] = bpe_prior_src['ctr_bones']
+
+    proportion_np = bpe_prior_src['bone_ratios'] # (n,1,13)
+    pose_locat = bpe_prior_src['pose_locat']
+    pose_orien = bpe_prior_src['pose_orien']
+    bone_symms = bpe_prior_src['bone_symms']
+    torso_lens = bpe_prior_src['torso_lens']
+    log_global_max = np.zeros((2,3), dtype=np.float32)
+    log_global_min = np.full((2,3), dtype=np.float32, fill_value=np.inf)
+
+    # Compute and log Torso-to-Bone ratio proportions priors
+    for comp_tag in ordered_bone_prop_tags:
+        print('Computing and plotting Bone-to-Torso Proportions {}..'.format(comp_tag))
+        r_idx = get_id_index(ordered_bone_prop_tags, comp_tag)
+        proportion_x = proportion_np[:, 0, r_idx]
+        proportion_min, proportion_max = np.min(proportion_x), np.max(proportion_x)
+
+        # BPE prior parameters are generated from the combination of subset and domain bone proportions
+        mean_mu = np.mean(proportion_x) # (1,)
+        variance_sigma = np.var(proportion_x) # (1,)
+        print('subset:{} - domain:{} - domain/subset:{:.2f}%'.format(proportion_x.shape,
+            dom_proportion.shape, (dom_proportion.shape[0]/proportion_x.shape[0])*100))
+
+        # computing data point weights as the likelihood via the probability density function
+        likelihood = probability_density_func(proportion_x, mean_mu, variance_sigma)
+        likelihood_min, likelihood_max = np.min(likelihood), np.max(likelihood)
+        likelihood_mean, likelihood_var = np.mean(likelihood), np.var(likelihood)
+        log_lihood = log_stretch(likelihood, spread=log_spread)  # 1e-5->1e-3->1e-1
+        log_lihood_min, log_lihood_max = np.min(log_lihood), np.max(log_lihood)
+        log_lihood_mean, log_lihood_std, log_lihood_var = np.mean(log_lihood), np.std(log_lihood), np.var(log_lihood)
+        inv_logli_mean_wgt = 1/np.ceil(log_lihood_mean)
+
+        # Bone-Ratio likelihood generated from closed dom
+        dom_proportion_min, dom_proportion_max = np.min(dom_proportion), np.max(dom_proportion)
+        dom_likelihood = probability_density_func(dom_proportion, mean_mu, variance_sigma)
+        dom_likelihood_min, dom_likelihood_max = np.min(dom_likelihood), np.max(dom_likelihood)
+        dom_log_lihood = log_stretch(dom_likelihood, spread=log_spread)  # 1e-5->1e-3->1e-1
+        dom_log_lihood_min, dom_log_lihood_max = np.min(dom_log_lihood), np.max(dom_log_lihood)
+        dom_log_lihood_mean, dom_log_lihood_var = np.mean(dom_log_lihood), np.var(dom_log_lihood)
+        maximum_likelihood = max(likelihood_max, dom_likelihood_max)
+        minimum_log_lihood = min(log_lihood_min, dom_log_lihood_min)
+        maximum_log_lihood = max(log_lihood_max, dom_log_lihood_max)
+        if dom_likelihood_max>=likelihood_max:
+            boneprop_likelihood_argmax = get_value_with_max_loglihood(dom_proportion, dom_likelihood)
+        else: boneprop_likelihood_argmax = get_value_with_max_loglihood(proportion_x, likelihood)
+
+        properties_logged[comp_tag] = (likelihood_min, minimum_log_lihood, dom_likelihood, dom_log_lihood)
+        meta_max = np.asarray([[proportion_max, likelihood_max, log_lihood_max],
+                               [dom_proportion_max, dom_likelihood_max, dom_log_lihood_max]])
+        log_global_max = np.where(log_global_max<meta_max, meta_max, log_global_max)
+        meta_min = np.asarray([[proportion_min, likelihood_min, log_lihood_min],
+                               [dom_proportion_min, dom_likelihood_min, dom_log_lihood_min]])
+        log_global_min = np.where(log_global_min>meta_min, meta_min, log_global_min)
+
+        rpps_priors_params['br_mean_variance'][comp_tag] = (mean_mu, variance_sigma)
+        rpps_priors_params['br_logli_metadata'][comp_tag] = \
+            (maximum_likelihood, boneprop_likelihood_argmax, log_spread, log_lihood_mean,
+             log_lihood_std, minimum_log_lihood, maximum_log_lihood, inv_logli_mean_wgt)
+
+        info_table = \
+            tabulate([[property[1], proportion_min, proportion_max, proportion_max-proportion_min, mean_mu, variance_sigma],
+                      ['Likelihood', likelihood_min, likelihood_max, likelihood_max-likelihood_min, likelihood_mean, likelihood_var],
+                      ['Log-Lihood', log_lihood_min, log_lihood_max, log_lihood_max-log_lihood_min, log_lihood_mean, log_lihood_var],
+                      ['Domain Log-Lihood', dom_log_lihood_min, dom_log_lihood_max, dom_log_lihood_max-dom_log_lihood_min, dom_log_lihood_mean, dom_log_lihood_var]],
+                     headers=[comp_tag, 'Min', 'Max', 'Range', 'Mean', 'Variance'], tablefmt='psql', floatfmt=fmt)
+        print(info_table)
+        rpps_priors_params['summary_log'] += info_table+'\n'
+
+    # Compute and log BSC priors
+    table_list = []
+    for s_idx, comp_tag in enumerate(ordered_symm_bone_pairs):
+        norm_sym_diffs = bone_symms[s_idx]
+        mean_mu, variance_sigma, likelihood_min, likelihood_max, log_lihood_min, log_lihood_max, \
+        log_lihood_mean, log_lihood_std = get_1d_priors(norm_sym_diffs, log_spread)
+        rpps_priors_params['bsym_mean_variance'][comp_tag] = (mean_mu, variance_sigma)
+        rpps_priors_params['bsym_logli_metadata'][comp_tag] = \
+            (likelihood_max, log_spread, log_lihood_mean, log_lihood_std, log_lihood_min, log_lihood_max)
+        table_list.append([comp_tag, likelihood_min, likelihood_max, log_lihood_min, log_lihood_max, mean_mu, variance_sigma])
+    print(tabulate(table_list, headers=non_br_header, tablefmt='psql', floatfmt=fmt))
+
+    # Compute and log Torso length
+    mean_mu, variance_sigma, likelihood_min, likelihood_max, log_lihood_min, log_lihood_max, \
+    log_lihood_mean, log_lihood_std = get_1d_priors(torso_lens, log_spread)
+    rpps_priors_params['tlen_mean_variance'] = (mean_mu, variance_sigma)
+    rpps_priors_params['tlen_logli_metadata'] = \
+        (likelihood_max, log_spread, log_lihood_mean, log_lihood_std, log_lihood_min, log_lihood_max)
+    print(tabulate([['Torso Length', likelihood_min, likelihood_max, log_lihood_min, log_lihood_max, mean_mu, variance_sigma]],
+                   headers=['']+non_br_header[1:], tablefmt='psql', floatfmt=fmt))
+
+    data_to_plot = []
+    likelihood_scl = np.around(np.pi**-(2*1), 1) # ~=0.1
+
+    # Compute and log pose orientation
+    table_list.clear()
+    print("Computing pose orientation..")
+    mean_per_axis, covariance_mtx, covariance_inv, msg = \
+        parameterize_jmc_priors('Pose-Orientation', pose_orien[:,0,:], 'noctr', assume_ctr=True, atol=1e-05)
+    assert (is_positive_definite(covariance_mtx)), 'PO covariance is not a positive definite matrix\n {}'.format(covariance_mtx)
+    rpps_priors_params['pori_axes_means'] = mean_per_axis
+    rpps_priors_params['pori_covariance'] = covariance_mtx
+    rpps_priors_params['pori_inv_covariance'] = covariance_inv
+    # computing color-scale weights for plots
+    nms_pts_coords, nms_pts_wgts = non_max_supress_points(pose_orien[:,0,:], d=d_nms)
+    nms_likelihood = multivariate_probability_density_func(nms_pts_coords, mean_per_axis, covariance_mtx, covariance_inv)
+    nms_log_lihood = likelihood_scl * log_stretch(nms_likelihood, spread=log_spread)  # 1e-5->1e-3->1e-1
+    data_to_plot.append(['Pose Orientation', nms_pts_coords, nms_pts_wgts, nms_likelihood, nms_log_lihood])
+    table_list.append(['Pose Orientation', min(nms_likelihood), max(nms_likelihood),
+                       min(nms_log_lihood), max(nms_log_lihood), mean_per_axis, covariance_mtx])
+
+    # Compute and log pose position
+    print("Computing pose location..")
+    # print(np.min(pose_locat[:,0,0]), np.min(pose_locat[:,0,1]), np.min(pose_locat[:,0,2]))
+    # print(np.max(pose_locat[:,0,0]), np.max(pose_locat[:,0,1]), np.max(pose_locat[:,0,2]))
+    mean_per_axis, covariance_mtx, covariance_inv, msg = \
+        parameterize_jmc_priors('Pose-Location', pose_locat[:,0,:], 'noctr', assume_ctr=True, atol=1e-05)
+    assert (is_positive_definite(covariance_mtx)), 'PL covariance is not a positive definite matrix\n {}'.format(covariance_mtx)
+    rpps_priors_params['ploc_axes_means'] = mean_per_axis
+    rpps_priors_params['ploc_covariance'] = covariance_mtx
+    rpps_priors_params['ploc_inv_covariance'] = covariance_inv
+    # computing color-scale weights for plots
+    nms_pts_coords, nms_pts_wgts = non_max_supress_points(pose_locat[:,0,:], d=d_nms)
+    nms_likelihood = multivariate_probability_density_func(nms_pts_coords, mean_per_axis, covariance_mtx, covariance_inv)
+    nms_log_lihood = likelihood_scl * log_stretch(nms_likelihood, spread=log_spread)  # 1e-5->1e-3->1e-1
+    data_to_plot.append(['Pose\nLocation', nms_pts_coords, nms_pts_wgts, nms_likelihood, nms_log_lihood])
+    table_list.append(['Pose\nLocation', min(nms_likelihood), max(nms_likelihood),
+                       min(nms_log_lihood), max(nms_log_lihood), mean_per_axis, covariance_mtx])
+    print(tabulate(table_list, headers=non_br_header, tablefmt='psql', floatfmt=fmt))
+
+    # record priors
+    pickle_write(rpps_priors_params, os.path.join(subset_dir, bone_prior_params_file))
+
+    fig_dir = os.path.join('../images', subset, bone_prior_figure_dir)
+    os.makedirs(fig_dir, exist_ok=True)
+
+    if plot_properties:
+        # Plot pose orientation and location
+        SPS_FIG, SPS_AXS = plt.subplots(nrows=2, ncols=3, subplot_kw={'projection':'3d'}, num='3DPPlots', figsize=(9, 6),)
+        col_tags = ['Frequency', 'Likelihood', 'Log-Likelihood']
+        title = 'Pose Orientation and Location'
+        for idx in range(len(data_to_plot)):
+            axes = (-1,1) if idx==0 else (-2, 2)
+            z_axis = (-1,1) if idx==0 else (0, 8)
+            plot_axis = True if idx==0 else False
+            for wgt_idx in range(2, 5):
+                col_idx = wgt_idx - 2
+                sb_tag = data_to_plot[idx][0]+' '+col_tags[col_idx]
+                render_joint_mobility(sb_tag, data_to_plot[idx][1], data_to_plot[idx][wgt_idx], title, '3DPPlots',
+                        None, (None, None), nms_tag, SPS_AXS[idx, col_idx], SPS_FIG, fig_dir, plot_axis=plot_axis,
+                        axis_lim=axes, z_lim=z_axis, change_view=False, alpha=0.5, activate_fig=True, save_fig=False)
+
+        # Plot bone proportion range
+        SPS_FIG, SPS_AXS, FIG_IDS = [None]*2, [None]*2, ['pdfl','lkli']
+        n_rows, n_cols = prop_fig_rowvcol[len(ordered_bone_prop_tags)]
+        for i in range(len(FIG_IDS)):
+            SPS_FIG[i], SPS_AXS[i] = plt.subplots(nrows=n_rows, ncols=n_cols, num=FIG_IDS[i], figsize=(3*n_cols, 3*n_rows))
+            plt.subplots_adjust(left=0.03, bottom=None, right=0.97, top=None, wspace=0.3, hspace=0.5)
+
+        first_line_plot_idx = 0 #4 if plot_hists else 0
+        for c_idx, comp_tag in enumerate(ordered_bone_prop_tags):
+            sp_comp_tag = comp_tag.format('')
+            likelihood_min, minimum_log_lihood, dom_likelihood, dom_log_lihood = properties_logged[comp_tag]
+            norm_meta_data = ((dom_log_lihood, dom_likelihood), (minimum_log_lihood, likelihood_min))
+            row_idx, col_idx = c_idx//n_cols, c_idx%n_cols
+
+            fig_idx = first_line_plot_idx
+            title = 'Likelihood of Bone-Ratio Range [{} - LogSpred:{}]'.format(subset, log_spread)
+            sps_axs_i = SPS_AXS[fig_idx][row_idx,col_idx] if n_rows>1 else SPS_AXS[fig_idx][col_idx]
+            line_plots(sp_comp_tag, dom_proportion, dom_likelihood, likelihood_min, title, grp_tag, FIG_IDS[fig_idx],
+                       SPS_FIG[fig_idx], sps_axs_i, fig_dir, meta_range[0], meta_range[1], activate_fig=True)
+            fig_idx = first_line_plot_idx+1
+            title = 'LogLihood (Red-Left) and {}-Loglihood (Blue-Right) Values for Bone-Ratio' \
+                    ' [{} - LogSpred:{}]'.format(FIG_IDS[fig_idx].upper(), subset, log_spread)
+            sps_axs_i = SPS_AXS[fig_idx][row_idx,col_idx] if n_rows>1 else SPS_AXS[fig_idx][col_idx]
+            y_range = meta_range[1:3]
+            twin_axis_line_plots(sp_comp_tag, dom_proportion, norm_meta_data, title, grp_tag, FIG_IDS[fig_idx],
+                                 SPS_FIG[fig_idx], sps_axs_i, fig_dir, meta_range[0], y_range, activate_fig=True,
+                                 twin_y=False, display=(c_idx==len(ordered_bone_prop_tags)-1))
+
+    for idx, set_name in enumerate(['All-Global', 'All-Global Domain']):
+        summary_table = tabulate([[property[1], log_global_min[idx,0], log_global_max[idx,0]],
+                                  ['Likelihood', log_global_min[idx,1], log_global_max[idx,1]],
+                                  ['Log-Lihood', log_global_min[idx,2], log_global_max[idx,2]]],
+                                 headers=[set_name, 'Min', 'Max'], tablefmt='psql', floatfmt=fmt)
+        print('\n{}'.format(summary_table))
+
+
+def mv_pdf_fbvec_likelihood_viz(subset='S1.S5.S6.S7.S8', type='fbj_orients', n_fbs=12, op_tag='_tch', frt_tag='',
+                cov_type='noctr', assume_ctr=True, augment=True, grp_jnts=True, rbo_type='rmtx', quintuple=False,
+                duplicate=0, log_spread=1., cross_plot_wgt=True, dom_angle_step=1, fmt=".7f"):
     # multi-variate probability-density-function unit-vector derived likelihood (JME)
     # Computes the probability density for the multivariate 'normal' distribution of free-limb unit-vector
     # from mean-per-axis-component (3,1) and covariance matrix (3,3) per joint of non-maximum suppressed subset.
     # Then plots joints' free-limb unit-vector mobility spheres using probability from PDF as weight
     properties_logged = {}
-    jme_priors_params = {'jnt_rank_sets':[{},{}], 'fb_covariance':[{},{}], 'fb_inv_covariance':[{},{}],
+    jmc_priors_params = {'jnt_rank_sets':[{},{}], 'fb_covariance':[{},{}], 'fb_inv_covariance':[{},{}],
                          'fb_axes_means':[{},{}], 'fb_logli_metadata':[{},{}], 'summary_log':''}  #[[None]*12,[None]*11]
-    nms_tag = str(d_nms).replace("0.", ".")
+    # nms_tag = str(d_nms).replace("0.", ".")
+    fbq_tag = 5 if quintuple else 4
     aug_tag = 'wxaug' if augment else 'nouag'
     grp_tag = 'grpjnt' if grp_jnts else 'perjnt'
+    dup_tag = '' if duplicate==0 else '+{}'.format(duplicate)
     cvc_tag = '{}{}cv'.format(cov_type, int(assume_ctr)) # mcd-cv vs. mle-cv # 0:assume_centered=False 1:assume_centered=True
     cvc_tag = cov_type if cov_type=='noctr' else cvc_tag # 'noctr' with assume_ctr=True
     subset_dir = os.path.join('../priors', subset)
-    joint_prior_property_file = 'joint_orients{}_{}_{}_{}_{}{}.pickle'.format(frt_tag, rbo_type, aug_tag, n_fbs, grp_tag, op_tag)
-    joint_prior_params_file = 'joint_priors_{}{}_{}_{}_{}_{}_{:.0e}.pickle'.format(frt_tag, cvc_tag, rbo_type, aug_tag, n_fbs, grp_tag, log_spread)
-    joint_prior_figure_dir = '{}_nms{}{}_{}_ls{:.0e}'.format(cvc_tag, nms_tag, frt_tag, rbo_type, log_spread)
+    fbjnt_prior_property_file = '{}{}_{}{}_{}_{}_{}{}.pickle'.\
+        format(type, frt_tag, rbo_type, fbq_tag, aug_tag, n_fbs, grp_tag, op_tag)
+    type_prefix = 'rpbo' if type=='RP-BoneOrient' else 'fb'
+    fbjnt_prior_params_file = '{}_prior_params_{}{}_{}{}_{}_{}_{}{}_{:.0e}.pickle'.\
+        format(type_prefix, frt_tag, cvc_tag, rbo_type, fbq_tag, aug_tag, n_fbs, grp_tag, dup_tag, log_spread)
+    fbjnt_prior_figure_dir = '{}_{}_nms{}{}_{}_ls{:.0e}'.format(type_prefix, cvc_tag, nms_tag, frt_tag, rbo_type, log_spread)
     n_rows, n_cols = 2, 5 if grp_jnts else 8 # 4 OR 6
     n_fg = 3 #6 # number of fig groups
     SPS_FIG, SPS_AXS = [None]*2*n_fg, [None]*2*n_fg
@@ -566,77 +724,41 @@ def mv_pdf_fbvec_likelihood_viz(subset='S1.S5.S6.S7.S8', n_fbs=12, op_tag='_tch'
         wgt_suffix, wgt_tag = ' - Cross Plot Scaled', 'cps'
     else: wgt_suffix, wgt_tag = '', 'uns' # 'uns'->unscaled
     spherical_pts_coords, spherical_pts_ftrvec = points_on_spherical_surface(step=dom_angle_step) # 1<=dom_angle_step<=2.5
-    circular_pts_coords, circular_pts_ftrvec = points_on_circumference(step=dom_angle_step*0.015) # 1<=dom_angle_step<=2.5
 
-    jme_prior_src = pickle_load(os.path.join(subset_dir, 'properties', joint_prior_property_file))
-    joint_ordered_names = jme_prior_src['joint_order']
-    jme_priors_params['joint_order'] = joint_ordered_names
-    jme_priors_params['joint_align_config'] = jme_prior_src['joint_align_config']
-    jme_priors_params['keypoint_indexes'] = jme_prior_src['keypoint_indexes']
-    jme_priors_params['group'] = jme_prior_src['group']
+    jmc_prior_src = pickle_load(os.path.join(subset_dir, 'properties', fbjnt_prior_property_file))
+    fbjnt_ordered_names = jmc_prior_src['joint_order']
+    jmc_priors_params['joint_order'] = fbjnt_ordered_names
+    jmc_priors_params['joint_align_config'] = jmc_prior_src['joint_align_config']
+    jmc_priors_params['keypoint_indexes'] = jmc_prior_src['keypoint_indexes']
+    jmc_priors_params['q_kpt_set'] = jmc_prior_src['q_kpt_set']
+    jmc_priors_params['group'] = jmc_prior_src['group']
 
-    jme_priors_params['fb_logli_metadata'][0]['rank_const'] = (1, 3) # (rank, k)
-    for joint_tag in _rank1_id_tags:
-        print('\n-------------------------\nLoading and parameterizing {} priors..'.format(joint_tag))
-        prefixes = ['R', 'L'] if grp_jnts and joint_tag in SYM_JOINT_GROUP else ['']
+    jmc_priors_params['fb_logli_metadata'][0]['rank_const'] = (1, 3) # (rank, k)
+    for fbjnt_tag in _rank1_id_tags:
+        print('\n-------------------------\nLoading and parameterizing {} priors..'.format(fbjnt_tag))
+        prefixes = ['R', 'L'] if grp_jnts and fbjnt_tag in SYM_JOINT_GROUP else ['']
         # merge free-bone unit vectors of symmetric joints if in grp-jnt mode
         symm_fb_uvecs_list = []
         if len(prefixes)>1:
             for prefix in prefixes:
-                symm_fb_uvecs_list.append(jme_prior_src[prefix+joint_tag])
+                symm_fb_uvecs_list.append(jmc_prior_src[prefix+fbjnt_tag])
             free_bone_orient = np.concatenate(symm_fb_uvecs_list, axis=0) # was free_bone_uvecs
-        else: free_bone_orient = jme_prior_src[joint_tag] # (?, 3:[x, y, z]) cartesian coordinate system
+        else:
+            free_bone_orient = jmc_prior_src[fbjnt_tag] # (?, 3:[x, y, z]) cartesian coordinate system
+            # if duplicate>0 then free_bone_orient is repeated 2^(duplicate)
+            for dup_idx in range(duplicate):
+                print('\tduplicating 2^{} times..'.format(dup_idx+1))
+                free_bone_orient = np.concatenate([free_bone_orient, free_bone_orient], axis=0)
 
         # Compute mean and covariance matrix of joint's free-limb unit vector components' distribution
-        if joint_tag in JOINT_2D_TAGS:
-            # only components of x and y axis matter, z=0
-            free_bone_orient = free_bone_orient[:,1:] # (n, 1:[theta]/2:[y,z])
-            dom_pts_coords, dom_pts_ftrvec = circular_pts_coords, circular_pts_ftrvec
-        else: dom_pts_coords, dom_pts_ftrvec = spherical_pts_coords, spherical_pts_ftrvec
+        dom_pts_coords, dom_pts_ftrvec = spherical_pts_coords, spherical_pts_ftrvec
         print('subset:{} - domain:{} - domain/subset:{:.1f}%'.format(free_bone_orient.shape,
             dom_pts_coords.shape, (dom_pts_coords.shape[0]/free_bone_orient.shape[0])*100))
 
-        # Extract JME Pose Priors parameters
-        # if cov_type in ['mcd', 'mle']:
-        #     if cov_type=='mcd':
-        #         cov = MinCovDet(random_state=n_fbs, assume_centered=assume_ctr).fit(free_bone_orient) # best if assume_centered=False
-        #     elif cov_type=='mle':
-        #         cov = EmpiricalCovariance(assume_centered=assume_ctr).fit(free_bone_orient) # best if assume_centered=True and np.mean()
-        #
-        #     if assume_ctr:
-        #         x_data = free_bone_orient[cov.support_, :]
-        #         all_data_mean = np.mean(free_bone_orient, axis=0, keepdims=True).T # (3,) -> (3,1)
-        #         mean_per_axis = np.mean(x_data, axis=0, keepdims=True).T # (3,) -> (3,1)
-        #         msg = 'using {} of {} data points ({:.1f}%), mean difference:{}'.\
-        #             format(x_data.shape[0], free_bone_orient.shape[0],
-        #                    (x_data.shape[0]/free_bone_orient.shape[0])*100, (all_data_mean-mean_per_axis)[:,0])
-        #         jme_priors_params['summary_log'] += '\n'+msg+'\n'
-        #         print(msg)
-        #     else: mean_per_axis = np.expand_dims(cov.location_, axis=-1) # (3,) -> (3,1) todo: mean from data to avoid nan??
-        #
-        #     covariance_mtx = cov.covariance_
-        #     covariance_inv = cov.precision_
-        #     if joint_tag.find('Waist')>=0: covariance_mtx[-1,-1], covariance_inv[0,0] = 1., 1.
-        #
-        #     print('est-mean:{}\n'.format(cov.location_))
-        #     print('est-covar:\n{}\n'.format(cov.covariance_))
-        #     print('raw-mean:{}\nest-mean:{}\n'.format(cov.raw_location_, cov.location_))
-        #     print('raw-covar:\n{}\nest-covar:\n{}\n'.format(cov.raw_covariance_, cov.covariance_))
-        #     print('cov-precision:\n{}\ninv-covariance:\n{}\n'.format(cov.precision_, np.linalg.inv(cov.covariance_)))
-        #     print('inverse matrix test: cov-precision:{} inv-covariance:{}'.format(
-        #         np.all(np.isclose(cov.covariance_.dot(cov.precision_), np.eye(3), atol=1e-07)),
-        #         np.all(np.isclose(cov.covariance_.dot(np.linalg.inv(cov.covariance_)), np.eye(3), atol=1e-07))))
-        #     # sys.exit()
-        # else:
-        #     mean_per_axis = np.mean(free_bone_orient, axis=0, keepdims=True).T # (3,) -> (3,1)
-        #     covariance_mtx = empirical_covariance(free_bone_orient, assume_centered=True).astype(np.float32) # (3,3) or (2,2)
-        #     #if joint_tag.find('Waist')>=0: covariance_mtx[-1,-1]
-        #     covariance_inv = np.linalg.inv(covariance_mtx)
-
         mean_per_axis, covariance_mtx, covariance_inv, msg = \
-            parameterize_jmc_priors(joint_tag, free_bone_orient, cov_type, assume_ctr, rs_seed=n_fbs)
+            parameterize_jmc_priors(fbjnt_tag, free_bone_orient, cov_type, assume_ctr, atol=1e-05, rs_seed=n_fbs)
         assert (is_positive_definite(covariance_mtx)), 'not positive definite matrix\n {}'.format(covariance_mtx)
-        if msg!='': jme_priors_params['summary_log'] += '\n'+msg+'\n'
+        if msg!='': jmc_priors_params['summary_log'] += '\n'+msg+'\n'
 
         likelihood = multivariate_probability_density_func(free_bone_orient, mean_per_axis, covariance_mtx, covariance_inv)
         likelihood_min, likelihood_max = np.min(likelihood), np.max(likelihood)
@@ -662,30 +784,25 @@ def mv_pdf_fbvec_likelihood_viz(subset='S1.S5.S6.S7.S8', n_fbs=12, op_tag='_tch'
         if dom_likelihood_max>=likelihood_max:
             freebone_likelihood_argmax = get_value_with_max_loglihood(dom_pts_ftrvec, dom_likelihood)
         else: freebone_likelihood_argmax = get_value_with_max_loglihood(free_bone_orient, likelihood)
-        properties_logged[joint_tag] = \
-            (nms_pts_coords, nms_pts_wgts, nms_likelihood, dom_likelihood, nms_log_lihood, dom_log_lihood)#,
-             #nms_ilmw_logli, dom_ilmw_logli, nms_msnl_logli, dom_msnl_logli, nms_mmsn_logli, dom_mmsn_logli)
+        properties_logged[fbjnt_tag] = \
+            (nms_pts_coords, nms_pts_wgts, nms_likelihood, dom_likelihood, nms_log_lihood, dom_log_lihood)
 
         # note pose prior parameters (free-bone mean & covariance, and log-likelihood mean)
         for prefix in prefixes:
-            orient_id = prefix+joint_tag
-            jme_priors_params['jnt_rank_sets'][0][orient_id] = [orient_id]
-            jme_priors_params['fb_axes_means'][0][orient_id] = mean_per_axis
-            jme_priors_params['fb_covariance'][0][orient_id] = covariance_mtx
-            jme_priors_params['fb_inv_covariance'][0][orient_id] = covariance_inv
-            jme_priors_params['fb_logli_metadata'][0][orient_id] = \
+            orient_id = prefix+fbjnt_tag
+            jmc_priors_params['jnt_rank_sets'][0][orient_id] = [orient_id]
+            jmc_priors_params['fb_axes_means'][0][orient_id] = mean_per_axis
+            jmc_priors_params['fb_covariance'][0][orient_id] = covariance_mtx
+            jmc_priors_params['fb_inv_covariance'][0][orient_id] = covariance_inv
+            jmc_priors_params['fb_logli_metadata'][0][orient_id] = \
                 (maximum_likelihood, freebone_likelihood_argmax, log_spread, log_lihood_mean,
                  log_lihood_std, minimum_log_lihood, maximum_log_lihood, inv_logli_mean_wgt)
 
         meta_max = np.asarray([[np.max(nms_pts_wgts), np.max(nms_likelihood), np.max(nms_log_lihood)],
-                                #np.max(nms_msnl_logli), np.max(nms_mmsn_logli), np.max(nms_ilmw_logli)],
-                               [0, np.max(dom_likelihood), np.max(dom_log_lihood)]])#,
-                                #np.max(dom_msnl_logli), np.max(dom_mmsn_logli), np.max(dom_ilmw_logli)]])
+                               [0, np.max(dom_likelihood), np.max(dom_log_lihood)]])
         log_global_max = np.where(log_global_max<meta_max, meta_max, log_global_max)
         meta_min = np.asarray([[np.min(nms_pts_wgts), np.min(nms_likelihood), np.min(nms_log_lihood)],
-                                #np.min(nms_msnl_logli), np.min(nms_mmsn_logli), np.min(nms_ilmw_logli)],
-                               [np.inf, np.min(dom_likelihood), np.min(dom_log_lihood)]])#,
-                                #np.min(dom_msnl_logli), np.min(dom_mmsn_logli), np.min(dom_ilmw_logli)]])
+                               [np.inf, np.min(dom_likelihood), np.min(dom_log_lihood)]])
         log_global_min = np.where(log_global_min>meta_min, meta_min, log_global_min)
 
         info_table = \
@@ -698,86 +815,48 @@ def mv_pdf_fbvec_likelihood_viz(subset='S1.S5.S6.S7.S8', n_fbs=12, op_tag='_tch'
                        format(log_lihood_mean, fmt), format(np.var(log_lihood), fmt)],
                       ['Domain Log-Lihood', format(dom_log_lihood_min, fmt), format(dom_log_lihood_max, fmt),
                        format(np.mean(dom_log_lihood), fmt), format(np.var(dom_log_lihood), fmt)]],
-                      # ['ILMW Log-Lihood', format(np.min(nms_ilmw_logli), fmt), format(np.max(nms_ilmw_logli), fmt),
-                      #  format(np.mean(nms_ilmw_logli), fmt), format(np.var(nms_ilmw_logli), fmt)],
-                      # ['Domain ILMW Log-Lihood', format(np.min(dom_ilmw_logli), fmt), format(np.max(dom_ilmw_logli), fmt),
-                      #  format(np.mean(dom_ilmw_logli), fmt), format(np.var(dom_ilmw_logli), fmt)],#--
-                      # ['MSNL Log-Lihood', format(np.min(nms_msnl_logli), fmt), format(np.max(nms_msnl_logli), fmt),
-                      #  format(np.mean(nms_msnl_logli), fmt), format(np.var(nms_msnl_logli), fmt)],
-                      # ['Domain MSNL Log-Lihood', format(np.min(dom_msnl_logli), fmt), format(np.max(dom_msnl_logli), fmt),
-                      #  format(np.mean(dom_msnl_logli), fmt), format(np.var(dom_msnl_logli), fmt)],
-                      # ['MMSN Log-Lihood', format(np.min(nms_mmsn_logli), fmt), format(np.max(nms_mmsn_logli), fmt),
-                      #  format(np.mean(nms_mmsn_logli), fmt), format(np.var(nms_mmsn_logli), fmt)],
-                      # ['Domain MMSN Log-Lihood', format(np.min(dom_mmsn_logli), fmt), format(np.max(dom_mmsn_logli), fmt),
-                      #  format(np.mean(dom_mmsn_logli), fmt), format(np.var(dom_mmsn_logli), fmt)]],
-                     headers=[joint_tag, 'Min', 'Max', 'Mean', 'Co-Variance'], tablefmt='psql', floatfmt=fmt)
+                     headers=[fbjnt_tag, 'Min', 'Max', 'Mean', 'Co-Variance'], tablefmt='psql', floatfmt=fmt)
         print(info_table)
-        jme_priors_params['summary_log'] += info_table+'\n'
+        jmc_priors_params['summary_log'] += info_table+'\n'
 
-    jme_priors_params['fb_logli_metadata'][1]['rank_const'] = (2, 6) # (rank, k)
+    jmc_priors_params['fb_logli_metadata'][1]['rank_const'] = (2, 6) # (rank, k)
     for combo_joints_tag in _rank2_id_tags:
-        print('\n-------------------------\nParameterizing combo joints: {}..'.format(combo_joints_tag))
-        free_bone_angles = None
+        print('---------------------------\nParameterizing combo joints: {}..'.format(combo_joints_tag))
         joints_tags = combo_joints_tag.split('-&-')
         combo_fb_uvecs_list = []
 
         contains_sym_jnt = False
-        for joint_tag in joints_tags:
-            if grp_jnts and joint_tag in SYM_JOINT_GROUP:
+        for fbjnt_tag in joints_tags:
+            if grp_jnts and fbjnt_tag in SYM_JOINT_GROUP:
                 contains_sym_jnt = True
                 break
 
-        joint_pairs = []
-        for joint_tag in joints_tags:
+        fbjnt_pairs = []
+        for fbjnt_tag in joints_tags:
             if contains_sym_jnt:
-                combo_prefixes = ['R', 'L'] if grp_jnts and joint_tag in SYM_JOINT_GROUP else ['', '']
+                combo_prefixes = ['R', 'L'] if grp_jnts and fbjnt_tag in SYM_JOINT_GROUP else ['', '']
                 symm_fb_uvecs_list = []
                 symm_dup_jnts = []
                 for prefix in combo_prefixes:
-                    symm_fb_uvecs_list.append(jme_prior_src[prefix+joint_tag])
-                    symm_dup_jnts.append(prefix+joint_tag)
+                    symm_fb_uvecs_list.append(jmc_prior_src[prefix+fbjnt_tag])
+                    symm_dup_jnts.append(prefix+fbjnt_tag)
                 symm_fb_uvecs = np.concatenate(symm_fb_uvecs_list, axis=0)
                 combo_fb_uvecs_list.append(symm_fb_uvecs) # (?, 3:[x, y, z]) cartesian coordinate system
-                joint_pairs.append(symm_dup_jnts)
+                fbjnt_pairs.append(symm_dup_jnts)
             else:
-                combo_fb_uvecs_list.append(jme_prior_src[joint_tag]) # (?, 3:[x, y, z]) cartesian coordinate system
-                joint_pairs.append([joint_tag])
-        assert (len(joint_pairs[0])==len(joint_pairs[1])), 'joint_pairs:{}'.format(joint_pairs)
+                combo_fb_uvecs_list.append(jmc_prior_src[fbjnt_tag]) # (?, 3:[x, y, z]) cartesian coordinate system
+                fbjnt_pairs.append([fbjnt_tag])
+        assert (len(fbjnt_pairs[0])==len(fbjnt_pairs[1])), 'joint_pairs:{}'.format(fbjnt_pairs)
 
-        combo_fb_uvecs = np.concatenate(combo_fb_uvecs_list, axis=-1)
-        free_bone_orient = combo_fb_uvecs
+        combo_fbs_orient = np.concatenate(combo_fb_uvecs_list, axis=-1)
 
         # Extract JME Pose Priors parameters
         mean_per_axis, covariance_mtx, covariance_inv, msg = \
-            parameterize_jmc_priors(combo_joints_tag, free_bone_orient, cov_type, assume_ctr, rs_seed=n_fbs)
+            parameterize_jmc_priors(combo_joints_tag, combo_fbs_orient, cov_type, assume_ctr, rs_seed=n_fbs)
         assert (is_positive_definite(covariance_mtx)), 'not positive definite matrix\n {}'.format(covariance_mtx)
-        if msg!='': jme_priors_params['summary_log'] += '\n'+msg+'\n'
+        if msg!='': jmc_priors_params['summary_log'] += '\n'+msg+'\n'
 
-        # if cov_type=='mcd':
-        #     cov = MinCovDet(random_state=n_fbs, assume_centered=assume_ctr).fit(free_bone_orient) # best if assume_centered=False
-        # elif cov_type=='mle':
-        #     cov = EmpiricalCovariance(assume_centered=assume_ctr).fit(free_bone_orient) # best if assume_centered=True and np.mean()
-        #
-        # if assume_ctr:
-        #     x_data = free_bone_orient[cov.support_, :]
-        #     all_data_mean = np.mean(free_bone_orient, axis=0, keepdims=True).T # (3,) -> (3,1)
-        #     mean_per_axis = np.mean(x_data, axis=0, keepdims=True).T # (3,) -> (3,1)
-        #     msg = 'using {} of {} data points ({:.1f}%), mean difference:{}'.format(x_data.shape[0], free_bone_orient.shape[0],
-        #             (x_data.shape[0]/free_bone_orient.shape[0])*100, (all_data_mean-mean_per_axis)[:,0])
-        #     jme_priors_params['summary_log'] += '\n'+msg+'\n'
-        #     print(msg)
-        # else: mean_per_axis = np.expand_dims(cov.location_, axis=-1) # (3,) -> (3,1)
-        # covariance_mtx = cov.covariance_
-        # covariance_pre = cov.precision_
-        #
-        # if combo_joints_tag.find('Waist')>=0: covariance_mtx[-1,-1], covariance_pre[0,0] = 1., 1.
-        # covariance_inv = np.linalg.inv(covariance_mtx)
-        #
-        # print('inverse matrix test: cov-precision:{} inv-covariance:{}'.format(
-        #     np.all(np.isclose(covariance_mtx.dot(covariance_pre), np.eye(6), atol=1e-05)),
-        #     np.all(np.isclose(covariance_mtx.dot(covariance_inv), np.eye(6), atol=1e-05))))
-
-        likelihood = multivariate_probability_density_func(free_bone_orient, mean_per_axis, covariance_mtx, covariance_inv)
+        likelihood = multivariate_probability_density_func(combo_fbs_orient, mean_per_axis, covariance_mtx, covariance_inv)
         likelihood_min, likelihood_max = np.min(likelihood), np.max(likelihood)
         likelihood_scl = np.around(np.pi**-(2*2), 2) # ~= 0.01
         log_lihood = likelihood_scl * log_stretch(likelihood, spread=log_spread)  # 1e-5->1e-3->1e-1
@@ -785,17 +864,17 @@ def mv_pdf_fbvec_likelihood_viz(subset='S1.S5.S6.S7.S8', n_fbs=12, op_tag='_tch'
         log_lihood_mean, log_lihood_std = np.mean(log_lihood), np.std(log_lihood)
         inv_logli_mean_wgt = 1/np.ceil(log_lihood_mean)
 
-        freebone_likelihood_argmax = get_value_with_max_loglihood(free_bone_orient, likelihood)
+        freebone_likelihood_argmax = get_value_with_max_loglihood(combo_fbs_orient, likelihood)
 
-        for sd_idx in range(len(joint_pairs[0])):
-            jnt_1 = joint_pairs[0][sd_idx]
-            jnt_2 = joint_pairs[1][sd_idx]
+        for sd_idx in range(len(fbjnt_pairs[0])):
+            jnt_1 = fbjnt_pairs[0][sd_idx]
+            jnt_2 = fbjnt_pairs[1][sd_idx]
             orient_combo_id = '{}-&-{}'.format(jnt_1, jnt_2)
-            jme_priors_params['jnt_rank_sets'][1][orient_combo_id] = [jnt_1, jnt_2]
-            jme_priors_params['fb_axes_means'][1][orient_combo_id] = mean_per_axis
-            jme_priors_params['fb_covariance'][1][orient_combo_id] = covariance_mtx
-            jme_priors_params['fb_inv_covariance'][1][orient_combo_id] = covariance_inv
-            jme_priors_params['fb_logli_metadata'][1][orient_combo_id] = \
+            jmc_priors_params['jnt_rank_sets'][1][orient_combo_id] = [jnt_1, jnt_2]
+            jmc_priors_params['fb_axes_means'][1][orient_combo_id] = mean_per_axis
+            jmc_priors_params['fb_covariance'][1][orient_combo_id] = covariance_mtx
+            jmc_priors_params['fb_inv_covariance'][1][orient_combo_id] = covariance_inv
+            jmc_priors_params['fb_logli_metadata'][1][orient_combo_id] = \
                 (likelihood_max, freebone_likelihood_argmax, log_spread, log_lihood_mean,
                  log_lihood_std, log_lihood_min, log_lihood_max, inv_logli_mean_wgt)
 
@@ -807,32 +886,28 @@ def mv_pdf_fbvec_likelihood_viz(subset='S1.S5.S6.S7.S8', n_fbs=12, op_tag='_tch'
                        format(log_lihood_mean, fmt), format(np.var(log_lihood), fmt)]],
                      headers=[combo_joints_tag, 'Min', 'Max', 'Mean', 'Co-Variance'], tablefmt='psql', floatfmt=fmt)
         print(info_table)
-        jme_priors_params['summary_log'] += info_table+'\n'
+        jmc_priors_params['summary_log'] += info_table+'\n'
 
     # record priors
-    pickle_write(jme_priors_params, os.path.join(subset_dir, joint_prior_params_file))
+    pickle_write(jmc_priors_params, os.path.join(subset_dir, fbjnt_prior_params_file))
 
-    plt_tags = ('', grp_tag, wgt_tag)
-    fig_dir = os.path.join('../images', subset, joint_prior_figure_dir)
+    plt_tags = ('', grp_tag, wgt_tag, dup_tag)
+    fig_dir = os.path.join('../images', subset, fbjnt_prior_figure_dir)
     os.makedirs(fig_dir, exist_ok=True)
     info_table_list = []
 
     # Plot free-bone data-points generated from dataset/subset
-    for j_idx, joint_tag in enumerate(_rank1_id_tags):
-        nms_pts_coords, nms_pts_wgts, likelihood, dom_likelihood, log_lihood, dom_log_lihood = properties_logged[joint_tag]#, \
-        #ilmw_logli, dom_ilmw_logli, msnl_logli, dom_msnl_logli, mmsn_logli, dom_mmsn_logli = properties_logged[joint_tag]
-        if joint_tag in JOINT_2D_TAGS:
-            dom_pts_coords = circular_pts_coords
-        else: dom_pts_coords = spherical_pts_coords
+    for j_idx, fbjnt_tag in enumerate(_rank1_id_tags):
+        nms_pts_coords, nms_pts_wgts, likelihood, dom_likelihood, log_lihood, dom_log_lihood = properties_logged[fbjnt_tag]
+        dom_pts_coords = spherical_pts_coords
 
-        plot_color_weights = [nms_pts_wgts, None, likelihood, dom_likelihood, log_lihood, dom_log_lihood]#,
-                              #msnl_logli, dom_msnl_logli, mmsn_logli, dom_mmsn_logli, ilmw_logli, dom_ilmw_logli]
+        plot_color_weights = [nms_pts_wgts, None, likelihood, dom_likelihood, log_lihood, dom_log_lihood]
 
         for sub_idx in range(2): # (train-subset & domain-subset)
             plot_points = nms_pts_coords if sub_idx==0 else dom_pts_coords
             row_idx, col_idx = j_idx//n_cols, j_idx%n_cols
             alpha = 0.5 if sub_idx==0 else 1.0
-            flip_view = not grp_jnts and joint_tag in ['LHip','LShoulder','LScapula','LElbow','LWaist']
+            flip_view = not grp_jnts and fbjnt_tag in ['LThigh','LBicep','LShoulder','LElbow','LHip']
             for fig_grp_idx in range(n_fg):
                 fig_idx = (fig_grp_idx*2)+sub_idx
                 point_weights = plot_color_weights[fig_idx]
@@ -842,7 +917,7 @@ def mv_pdf_fbvec_likelihood_viz(subset='S1.S5.S6.S7.S8', n_fbs=12, op_tag='_tch'
                              log_global_max[s_idx, fig_grp_idx]) if cross_plot_wgt else (None,None)
                 title = 'Joint Mobility ({}{}) Priors [{} Log-Spread:{}]'.\
                         format(title_tags[fig_idx], wgt_suffix, subset, log_spread)
-                render_joint_mobility(joint_tag, plot_points, point_weights, title, FIG_IDS[fig_idx], plt_tags,
+                render_joint_mobility(fbjnt_tag, plot_points, point_weights, title, FIG_IDS[fig_idx], plt_tags,
                                       wgt_range, nms_tag, SPS_AXS[fig_idx][row_idx,col_idx], SPS_FIG[fig_idx],
                                       fig_dir, change_view=flip_view, alpha=alpha, activate_fig=True, save_fig=True,
                                       display=(j_idx==len(_rank1_id_tags)-1 and sub_idx==1 and fig_grp_idx==n_fg-1))
@@ -853,8 +928,41 @@ def mv_pdf_fbvec_likelihood_viz(subset='S1.S5.S6.S7.S8', n_fbs=12, op_tag='_tch'
     info_table = tabulate(info_table_list, headers=['Properties', 'Min', 'Max'], tablefmt='psql', floatfmt=fmt)
     print('\n{}'.format(info_table))
 
+    # free-bone endpoints' log-likelihood animation
+    # --------------------------------------------------------------------------------------------------------------
+    print('\nAnimating 3D scatter plots...')
+    figsize_wxh = (15, 8) if grp_jnts else (20, 8)
+    anim_fig, anim_axs = plt.subplots(n_rows, n_cols, figsize=figsize_wxh, subplot_kw={'projection':'3d'}, num='anim')
+    anim_fig.subplots_adjust(left=0.0, right=1.0, wspace=-0.0)
 
-def parameterize_jmc_priors(component_tag, free_bone_orient, cov_type, assume_ctr, rs_seed=None):
+    def init():
+        for j_idx, fbjnt_tag in enumerate(_rank1_id_tags):
+            nms_pts_coords, __, likelihood, __, log_lihood, __ = properties_logged[fbjnt_tag]
+            row_idx, col_idx = j_idx//n_cols, j_idx%n_cols
+            flip_view = not grp_jnts and fbjnt_tag in ['LThigh','LBicep','LShoulder','LElbow','LHip']
+            title = 'Free-Bones Log-likelihood Animation Joint Mobility Priors [{} Log-Spread:{}]'.format(subset, log_spread)
+            render_joint_mobility(fbjnt_tag, nms_pts_coords, log_lihood, title, 'anim', plt_tags,
+                                  (None,None), nms_tag, anim_axs[row_idx,col_idx], anim_fig, fig_dir,
+                                  change_view=flip_view, alpha=0.5, activate_fig=True, save_fig=True, display=False)
+        return anim_fig,
+
+    def animate(i):
+        view_azim = (i + 30) % 360
+        for j_idx, fbjnt_tag in enumerate(_rank1_id_tags):
+            row_idx, col_idx = j_idx//n_cols, j_idx%n_cols
+            flip_view = not grp_jnts and fbjnt_tag in ['LThigh','LBicep','LShoulder','LElbow','LHip']
+            vc = -1 if flip_view else 1
+            anim_axs[row_idx,col_idx].view_init(azim=view_azim*vc, vertical_axis='y')
+        return anim_fig,
+
+    anim = animation.FuncAnimation(anim_fig, animate, init_func=init, frames=360, interval=20, blit=True)
+    anim_path = os.path.join(fig_dir, '{}_{}_{}{}{}.gif'.format(grp_tag, 'logli', wgt_tag, op_tag, nms_tag))
+    anim.save(anim_path, writer='ffmpeg', fps=30)
+    print('saved to {}'.format(anim_path))
+    # --------------------------------------------------------------------------------------------------------------
+
+
+def parameterize_jmc_priors(component_tag, free_bone_orient, cov_type, assume_ctr, atol=5e-03, rs_seed=None):
     msg = ''
     n = free_bone_orient.shape[1]
     if cov_type in ['mcd', 'mle']:
@@ -875,7 +983,7 @@ def parameterize_jmc_priors(component_tag, free_bone_orient, cov_type, assume_ct
 
         covariance_mtx = cov.covariance_
         covariance_inv = cov.precision_
-        if component_tag.find('Waist')>=0:
+        if component_tag.find('Hip')>=0:
             for i in range(n):
                 covariance_mtx[-1,i], covariance_inv[-1,i] = 0., 0.
                 covariance_mtx[i,-1], covariance_inv[i,-1] = 0., 0.
@@ -885,27 +993,26 @@ def parameterize_jmc_priors(component_tag, free_bone_orient, cov_type, assume_ct
         print('raw-covar:\n{}\nest-covar:\n{}\n'.format(cov.raw_covariance_, cov.covariance_))
         print('cov-precision:\n{}\ninv-covariance:\n{}\n'.format(cov.precision_, np.linalg.inv(cov.covariance_)))
         print('inverse matrix test: cov-precision:{} inv-covariance:{}'.format(
-            np.all(np.isclose(cov.covariance_.dot(np.linalg.inv(cov.covariance_)), np.eye(n), atol=1e-05)),
-            np.all(np.isclose(covariance_mtx.dot(covariance_inv), np.eye(n), atol=1e-05))))
-        # sys.exit()
+            np.all(np.isclose(cov.covariance_.dot(np.linalg.inv(cov.covariance_)), np.eye(n), atol=atol)),
+            np.all(np.isclose(covariance_mtx.dot(covariance_inv), np.eye(n), atol=atol))))
     else:
         mean_per_axis = np.mean(free_bone_orient, axis=0, keepdims=True).T # (3,) -> (3,1)
-        mean_per_axis = np.where(np.isclose(mean_per_axis, 0, atol=1e-07), 0., mean_per_axis)
-        covariance_mtx = empirical_covariance(free_bone_orient, assume_centered=True).astype(np.float32) # (3,3) or (2,2)
-        covariance_mtx = np.where(np.isclose(covariance_mtx, 0, atol=1e-07), 0., covariance_mtx)
-        #if component_tag.find('Waist')>=0:
+        #mean_per_axis = np.where(np.isclose(mean_per_axis, 0, atol=1e-07), 0., mean_per_axis)
+        #covariance_mtx = empirical_covariance(free_bone_orient, assume_centered=True).astype(np.float32) # (3,3) or (2,2)
+        covariance_mtx = empirical_covariance(free_bone_orient, assume_centered=assume_ctr) # OPT* >> assume_ctr=True
+        #covariance_mtx = np.where(np.isclose(covariance_mtx, 0, atol=1e-07), 0., covariance_mtx)
         for i in range(n):
-            if np.isclose(covariance_mtx[i,i], 0, atol=1e-07):
-                print('\tsetting {} null dimension-{} at {}'.format(component_tag, i, covariance_mtx[i,i]))
+            if np.isclose(covariance_mtx[i,i], 0., atol=1e-07):
+                msg += '\n\t[ALERT!] setting {} null dimension-{} at {}'.format(component_tag, i, covariance_mtx[i,i])
+                print(msg)
                 for j in range(n):
                     if i==j: continue
                     covariance_mtx[i,j], covariance_mtx[j,i] = 0., 0.
                 covariance_mtx[i,i] = 1.
         covariance_inv = np.linalg.inv(covariance_mtx)
-        # print('inverse matrix test: inv-covariance:{}'.format(
-        #     np.all(np.isclose(covariance_mtx.dot(covariance_inv), np.eye(n), atol=1e-05))))
         cov_dot_inv = covariance_mtx.dot(covariance_inv)
-        all_are_identity = np.all(np.isclose(cov_dot_inv, np.eye(n), atol=1e-02))
+        all_are_identity = np.all(np.isclose(cov_dot_inv, np.eye(n), atol=atol)) # atol=1e-05/1e-02
+        print('inverse covariance matrix test: {}'.format(all_are_identity))
         assert(all_are_identity), '{} inverse matrix-{} test: inv-covariance:\n{}'.format(component_tag, n, cov_dot_inv)
 
     return mean_per_axis, covariance_mtx, covariance_inv, msg
@@ -1032,54 +1139,47 @@ def self_sup_losses_and_weights():
 
 if __name__ == '__main__':
     d_nms = 0.05 # 0.01, 0.025, 0.05
-    group_props = True # *True
-    group_joints = True # *True
+    dups = 1
+    quintuple = False
+    group_props = False # *False
+    group_fbjnts = False # *True
     print_metadata = False
+    nms_tag = str(d_nms).replace("0.", ".")
+    prop_fig_rowvcol = {9:(3,3), 10:(2,5), 15:(3,5), 114:(19,6)}
 
-    GROUP_BONES = ['Shoulder','Bicep','Forearm','Abdomen','Thorax','Head','UFace','Hip','Thigh','Leg']
-
-    prop_fig_rowvcol = {9:(3,3), 15:(3,5), 114:(19,6)}
-
-    #perprop_tags = ['UFace/Head','Head/Thorax','Shoulder/Thorax','Abdomen/Thorax',
-    #                'Hip/Abdomen','Shoulder/Bicep','Forearm/Bicep',
-    #                 'Hip/Thigh','Leg/Thigh']
-
-    rank1_perjnt_tags = ['Head', 'Spine',  'RWaist', 'RHip', 'RKnee', 'RScapula', 'RShoulder', 'RElbow',
-                         'Neck', 'Pelvis', 'LWaist', 'LHip', 'LKnee', 'LScapula', 'LShoulder', 'LElbow'] # 16
-    rank1_grpjnt_tags = ['Head', 'Spine', 'Waist', 'Hip', 'Knee', 'Neck', 'Pelvis', 'Scapula', 'Shoulder', 'Elbow'] # 10
-    rank2_perjnt_tags = ['RElbow-&-RShoulder', 'LElbow-&-LShoulder', 'RShoulder-&-RScapula', 'LShoulder-&-LScapula',
-                         'Neck-&-RScapula', 'Neck-&-LScapula', 'Head-&-Neck', 'Spine-&-RScapula', 'Spine-&-LScapula',
-                         'Neck-&-Spine', 'Spine-&-Pelvis', 'Pelvis-&-RWaist', 'Pelvis-&-LWaist',
-                         'RHip-&-RWaist', 'LHip-&-LWaist', 'RKnee-&-RHip', 'LKnee-&-LHip'] # 17
-    rank2_grpjnt_tags = ['Elbow-&-Shoulder', 'Shoulder-&-Scapula', 'Neck-&-Scapula', 'Head-&-Neck', 'Spine-&-Scapula',
-                         'Neck-&-Spine', 'Spine-&-Pelvis', 'Pelvis-&-Waist', 'Hip-&-Waist', 'Knee-&-Hip'] # 10
-    _rank1_id_tags = rank1_grpjnt_tags if group_joints else rank1_perjnt_tags
-    _rank2_id_tags = rank2_grpjnt_tags if group_joints else rank2_perjnt_tags
-    JOINT_ORIENT_TYPE = ['scs', 'ccs'] # spherical vs. cartesian coordinate system
+    rank1_perjnt_tags = ['UFace', 'Head',  'RHip', 'RThigh', 'RLeg', 'RShoulder', 'RBicep', 'RForearm',
+                         'Thorax', 'Abdomen', 'LHip', 'LThigh', 'LLeg', 'LShoulder', 'LBicep', 'LForearm'] # 16
+    rank1_grpjnt_tags = ['UFace', 'Head', 'Hip', 'Thigh', 'Leg', 'Thorax', 'Abdomen', 'Shoulder', 'Bicep', 'Forearm'] # 10
+    rank2_perjnt_tags = ['RForearm-&-RBicep', 'LForearm-&-LBicep', 'RBicep-&-RShoulder', 'LBicep-&-LShoulder',
+                         'Head-&-RShoulder', 'Head-&-LShoulder', 'UFace-&-Head', 'Thorax-&-RShoulder',
+                         'Thorax-&-LShoulder', 'Head-&-Thorax', 'Thorax-&-Abdomen', 'Abdomen-&-RHip',
+                         'Abdomen-&-LHip', 'RThigh-&-RHip', 'LThigh-&-LHip', 'RLeg-&-RThigh', 'LLeg-&-LThigh'] # 17
+    rank2_grpjnt_tags = ['UFace-&-Bicep', 'Bicep-&-Shoulder', 'Head-&-Shoulder', 'UFace-&-Head', 'Thorax-&-Shoulder',
+                         'Head-&-Thorax', 'Thorax-&-Abdomen', 'Abdomen-&-Hip', 'Thigh-&-Hip', 'Leg-&-Thigh'] # 10
+    _rank1_id_tags = rank1_grpjnt_tags if group_fbjnts else rank1_perjnt_tags
+    _rank2_id_tags = rank2_grpjnt_tags if group_fbjnts else rank2_perjnt_tags
 
     ptd_hist_range, ptd_hist_subticks = [(-2, 8), (0, 1.5), (0, 1)], [2, 4, 2]
     blen_hist_range, blen_hist_subticks = [(100, 500), (0, 220), (0, 6)], [4, 5, 2]
     bse_hist_range, bse_hist_subticks = [(0, 0.0001), (0, 300000), (0, 15), (0, 1)], [3, 5, 2, 2]
 
-    bse_comp_tags = ['R/L-Hip','R/L-Thigh','R/L-Leg','R/L-Shoulder','R/L-Bicep','R/L-Forearm']
+    bse_comp_tags = ['R/L-Thigh','R/L-Thigh','R/L-Leg','R/L-Bicep','R/L-Bicep','R/L-Forearm']
     blen_comp_tags = ['R-Hip','R-Thigh','R-Leg','L-Hip','L-Thigh','L-Leg','Abdomen','Vertebra',
-                      'Neck','Head','L-Shoulder','L-Bicep','L-Forearm','R-Shoulder','R-Bicep','R-Forearm']
+                      'Head','UFace','L-Shoulder','L-Bicep','L-Forearm','R-Shoulder','R-Bicep','R-Forearm']
 
-    mv_pdf_fbvec_likelihood_viz('S1.1', 16, frt_tag='', grp_jnts=group_joints, cross_plot_wgt=False)
-    #sv_pdf_value_likelihood_viz('S1.1', 'bone_ratios_{}_{}{}_m{}.pickle', 15, frt_tag='', grp_props=group_props)
-    #sv_pdf_value_likelihood_viz('S1.S5.S6.S7.S8', 'bone_lengths_16_m.npy', 16, frt_tag='')
-    #sv_pdf_value_likelihood_viz(('bse','Symm-Bones'), 'bone_symms_6_m.npy', bse_comp_tags, bse_hist_range, bse_hist_subticks, 2, 3)
-    #euler_angle_point_cloud()
-    #cosine_euler_histograms()
-    #self_sup_losses_and_weights()
+    mv_pdf_fbvec_likelihood_viz('S1', 'RP-BoneOrient', 16, frt_tag='', grp_jnts=group_fbjnts,
+                                quintuple=quintuple, duplicate=dups, cross_plot_wgt=False)
+    pdf_likelihood_combo_viz('S1', 'RP-PoseStruct_{}_{}_{}{}_m{}.pickle',9, .05, frt_tag='', grp_props=group_props)
+
+    self_sup_losses_and_weights()
 
     if print_metadata:
-        pdir = '../priors/S1.1'
+        pdir = '../priors/S1'
         filepath = os.path.join('{}/bone_priors_{}_{}_br_{}_{:.0e}.pickle'.format(pdir, 'wxaug', 15, 'grpprp', 1))
         bpe_priors_params = pickle_load(filepath)
         print('\nBPC\n{}\n'.format(bpe_priors_params['summary_log']))
 
-        filepath = os.path.join('{}/joint_priors_{}{}{}_{}_{:.0e}.pickle'.format(pdir, '', 'noctr', '_wxaug_16', 'grpjnt', 1))
+        filepath = os.path.join('{}/fbj_priors_{}{}{}_{}_{:.0e}.pickle'.format(pdir, '', 'noctr', '_wxaug_16', 'grpjnt', 1))
         jme_priors_params = pickle_load(filepath)
         print('\nJMC\n{}\n'.format(jme_priors_params['summary_log']))
 
