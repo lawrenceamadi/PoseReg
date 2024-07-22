@@ -221,8 +221,8 @@ if semi_supervised and args.gen_pose_priors>=0:
     if args.gen_pose_priors>0:
         # BPC
         std_tag = str(args.induced_bonelen_std).replace('0.', '.')
-        bpc_priors = pickle_load('./priors/{}/rpps_prior_params_{}_{}_{}{}_{}_{:.0e}.pickle'.
-                                 format(set_tag, std_tag, 'wxaug', 9, frt_tag, bpc_grp_tag, ls_tag))
+        bpc_priors = pickle_load('./priors/{}/br_prior_params_blstd{}_wxaug_{}{}_{}_{:.0e}.pickle'.
+                                 format(set_tag, std_tag, nbr_tag, frt_tag, bpc_grp_tag, ls_tag))
         bone_prop_pair_idxs_A, bone_prop_pair_idxs_B = extract_bpc_config_params(bpc_priors, VPOSE3D_BONE_ID_2_IDX)
         bpc_variance, bpc_exponent_coefs, bpc_mean, bpc_max_likelihoods, bpc_likeli_argmax, bpc_logli_spread, \
         bpc_logli_mean, bpc_logli_std, bpc_logli_min, bpc_logli_span, bpc_ilmw_wgts, bpc_log_of_spread, bpc_move_up_const, \
@@ -231,9 +231,8 @@ if semi_supervised and args.gen_pose_priors>=0:
         # JMC
         fbq_tag = 5 if args.quintuple else 4
         rot_tag = '_quat' if args.jmc_fbo_ops_type=='quat' else '_rmtx'#''
-        jmc_priors = pickle_load('./priors/{}/rpbo_prior_params_{}{}_{}{}_{}_{}_{}{}_{:.0e}.pickle'.
-                                 format(set_tag, frt_tag, cov_tag, rot_tag, fbq_tag, 'wxaug', 16, jmc_grp_tag, dup_tag, ls_tag))
-        assert (args.group_jmc==jmc_priors['group']), 'args.group_jmc:{} != {}'.format(args.group_jmc, jmc_priors['group'])
+        jmc_priors = pickle_load('./priors/{}/fb_prior_params{}_{}{}{}_wxaug_16_{}{}_{:.0e}.pickle'.
+                                 format(set_tag, frt_tag, cov_tag, rot_tag, fbq_tag, jmc_grp_tag, dup_tag, ls_tag))
         if args.jmc_fbo_ops_type=='quat':
             jmc_qset_kpt_idxs, axis1_quadrant, axis2_quadrant, plane_proj_mult, hflip_mult, nr_fb_idxs = fboa_quaternion_config(
                 jmc_priors['joint_align_config'], jmc_priors['joint_order'], args.group_jmc, args.quintuple)

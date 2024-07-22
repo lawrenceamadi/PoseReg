@@ -3,7 +3,7 @@
 # Exact copy from VideoPose3D
 data/prepare_*
 data/*.m
-data/utils.py
+data/data_utils.py
 
 **/__pycache__/
 
