@@ -180,8 +180,8 @@ def render_joint_mobility(joint_name, data_points, point_color_wgts, title, prop
     sp_axs.scatter3D(x, y, z, c=point_color_wgts, vmin=wgt_range[0], vmax=wgt_range[1], cmap='viridis', alpha=alpha)
 
     if save_fig:
-        op_tag, grp_tag, wgt_tag, dup_tag = tags
-        plt.savefig(os.path.join(fig_dir, '{}_{}_{}{}{}{}.png'.format(grp_tag, prop_tag, wgt_tag, op_tag, dup_tag, dtg)))
+        op_tag, grp_tag, wgt_tag = tags
+        plt.savefig(os.path.join(fig_dir, '{}_{}_{}{}{}.png'.format(grp_tag, prop_tag, wgt_tag, op_tag, dtg)))
     if display:
         plt.show(block=True)
         plt.close(prop_tag)
@@ -460,8 +460,8 @@ def sv_pdf_value_likelihood_viz(subset, proportion_file, n_ratios, blen_std, pro
 
 
 def pdf_likelihood_combo_viz(subset, proportion_file, n_ratios, blen_std, property=('bpe','Bones-Ratio'),
-                                frt_tag='', op_tag='_tch', augment=True, grp_props=False, log_spread=1.,
-                                dom_prop_step=0.0001, plot_properties=True, fmt=".7f"):
+                             frt_tag='', op_tag='_tch', augment=True, grp_props=False, log_spread=1.,
+                             dom_prop_step=0.0001, plot_properties=True, fmt=".7f"):
     # single-variate probability-density-function value derived likelihood (BSE & BPE)
     # Computes the probability density for the single-variate 'normal' distribution of bone proportions
     # from mean (1,) and variance (1,) per bone ratios.
@@ -477,10 +477,9 @@ def pdf_likelihood_combo_viz(subset, proportion_file, n_ratios, blen_std, proper
     grp_tag = 'grpprp' if grp_props and n_ratios!=114 else 'perprp'
     subset_dir = os.path.join('../priors', subset)
     bone_prior_property_file = proportion_file.format(aug_tag, std_tag, n_ratios, frt_tag, op_tag)
-    bone_prior_params_file = 'rpps_prior_params_{}_{}_{}{}_{}_{:.0e}.pickle' \
+    bone_prior_params_file = 'br_prior_params_{}_{}_{}{}_{}_{:.0e}.pickle' \
         .format(std_tag, aug_tag, n_ratios, frt_tag, grp_tag, log_spread)
-    bone_prior_figure_dir = 'rpps_{}{}{}_ls{:.0e}'.format(n_ratios, frt_tag, std_tag, log_spread)
-    non_br_header = ['Symm Pair', 'Likelihood-Min', 'Likelihood-Max', 'LogLikeli-Min', 'LogLikeli-Max', 'Mean', 'Variance']
+    bone_prior_figure_dir = 'br_{}{}{}_ls{:.0e}'.format(n_ratios, frt_tag, std_tag, log_spread)
 
     meta_range, meta_subticks = [(0., 1.2), (0, 30), (0, 3.5), (-8,2)], [2, 5, 5, 5]
     prop_range = meta_range[0]
@@ -491,17 +490,10 @@ def pdf_likelihood_combo_viz(subset, proportion_file, n_ratios, blen_std, proper
     rpps_priors_params['ratio_order'] = ordered_bone_prop_tags
     rpps_priors_params['induced_blen_std'] = bpe_prior_src['induced_blen_std']
     rpps_priors_params['keypoint_indexes'] = bpe_prior_src['keypoint_indexes']
-    ordered_symm_bone_pairs = bpe_prior_src['symm_order']
-    rpps_priors_params['symm_order'] = ordered_symm_bone_pairs
     rpps_priors_params['rgt_sym_bones'] = bpe_prior_src['rgt_sym_bones']
     rpps_priors_params['lft_sym_bones'] = bpe_prior_src['lft_sym_bones']
-    rpps_priors_params['ctr_bones'] = bpe_prior_src['ctr_bones']
 
     proportion_np = bpe_prior_src['bone_ratios'] # (n,1,13)
-    pose_locat = bpe_prior_src['pose_locat']
-    pose_orien = bpe_prior_src['pose_orien']
-    bone_symms = bpe_prior_src['bone_symms']
-    torso_lens = bpe_prior_src['torso_lens']
     log_global_max = np.zeros((2,3), dtype=np.float32)
     log_global_min = np.full((2,3), dtype=np.float32, fill_value=np.inf)
 
@@ -563,66 +555,6 @@ def pdf_likelihood_combo_viz(subset, proportion_file, n_ratios, blen_std, proper
         print(info_table)
         rpps_priors_params['summary_log'] += info_table+'\n'
 
-    # Compute and log BSC priors
-    table_list = []
-    for s_idx, comp_tag in enumerate(ordered_symm_bone_pairs):
-        norm_sym_diffs = bone_symms[s_idx]
-        mean_mu, variance_sigma, likelihood_min, likelihood_max, log_lihood_min, log_lihood_max, \
-        log_lihood_mean, log_lihood_std = get_1d_priors(norm_sym_diffs, log_spread)
-        rpps_priors_params['bsym_mean_variance'][comp_tag] = (mean_mu, variance_sigma)
-        rpps_priors_params['bsym_logli_metadata'][comp_tag] = \
-            (likelihood_max, log_spread, log_lihood_mean, log_lihood_std, log_lihood_min, log_lihood_max)
-        table_list.append([comp_tag, likelihood_min, likelihood_max, log_lihood_min, log_lihood_max, mean_mu, variance_sigma])
-    print(tabulate(table_list, headers=non_br_header, tablefmt='psql', floatfmt=fmt))
-
-    # Compute and log Torso length
-    mean_mu, variance_sigma, likelihood_min, likelihood_max, log_lihood_min, log_lihood_max, \
-    log_lihood_mean, log_lihood_std = get_1d_priors(torso_lens, log_spread)
-    rpps_priors_params['tlen_mean_variance'] = (mean_mu, variance_sigma)
-    rpps_priors_params['tlen_logli_metadata'] = \
-        (likelihood_max, log_spread, log_lihood_mean, log_lihood_std, log_lihood_min, log_lihood_max)
-    print(tabulate([['Torso Length', likelihood_min, likelihood_max, log_lihood_min, log_lihood_max, mean_mu, variance_sigma]],
-                   headers=['']+non_br_header[1:], tablefmt='psql', floatfmt=fmt))
-
-    data_to_plot = []
-    likelihood_scl = np.around(np.pi**-(2*1), 1) # ~=0.1
-
-    # Compute and log pose orientation
-    table_list.clear()
-    print("Computing pose orientation..")
-    mean_per_axis, covariance_mtx, covariance_inv, msg = \
-        parameterize_jmc_priors('Pose-Orientation', pose_orien[:,0,:], 'noctr', assume_ctr=True, atol=1e-05)
-    assert (is_positive_definite(covariance_mtx)), 'PO covariance is not a positive definite matrix\n {}'.format(covariance_mtx)
-    rpps_priors_params['pori_axes_means'] = mean_per_axis
-    rpps_priors_params['pori_covariance'] = covariance_mtx
-    rpps_priors_params['pori_inv_covariance'] = covariance_inv
-    # computing color-scale weights for plots
-    nms_pts_coords, nms_pts_wgts = non_max_supress_points(pose_orien[:,0,:], d=d_nms)
-    nms_likelihood = multivariate_probability_density_func(nms_pts_coords, mean_per_axis, covariance_mtx, covariance_inv)
-    nms_log_lihood = likelihood_scl * log_stretch(nms_likelihood, spread=log_spread)  # 1e-5->1e-3->1e-1
-    data_to_plot.append(['Pose Orientation', nms_pts_coords, nms_pts_wgts, nms_likelihood, nms_log_lihood])
-    table_list.append(['Pose Orientation', min(nms_likelihood), max(nms_likelihood),
-                       min(nms_log_lihood), max(nms_log_lihood), mean_per_axis, covariance_mtx])
-
-    # Compute and log pose position
-    print("Computing pose location..")
-    # print(np.min(pose_locat[:,0,0]), np.min(pose_locat[:,0,1]), np.min(pose_locat[:,0,2]))
-    # print(np.max(pose_locat[:,0,0]), np.max(pose_locat[:,0,1]), np.max(pose_locat[:,0,2]))
-    mean_per_axis, covariance_mtx, covariance_inv, msg = \
-        parameterize_jmc_priors('Pose-Location', pose_locat[:,0,:], 'noctr', assume_ctr=True, atol=1e-05)
-    assert (is_positive_definite(covariance_mtx)), 'PL covariance is not a positive definite matrix\n {}'.format(covariance_mtx)
-    rpps_priors_params['ploc_axes_means'] = mean_per_axis
-    rpps_priors_params['ploc_covariance'] = covariance_mtx
-    rpps_priors_params['ploc_inv_covariance'] = covariance_inv
-    # computing color-scale weights for plots
-    nms_pts_coords, nms_pts_wgts = non_max_supress_points(pose_locat[:,0,:], d=d_nms)
-    nms_likelihood = multivariate_probability_density_func(nms_pts_coords, mean_per_axis, covariance_mtx, covariance_inv)
-    nms_log_lihood = likelihood_scl * log_stretch(nms_likelihood, spread=log_spread)  # 1e-5->1e-3->1e-1
-    data_to_plot.append(['Pose\nLocation', nms_pts_coords, nms_pts_wgts, nms_likelihood, nms_log_lihood])
-    table_list.append(['Pose\nLocation', min(nms_likelihood), max(nms_likelihood),
-                       min(nms_log_lihood), max(nms_log_lihood), mean_per_axis, covariance_mtx])
-    print(tabulate(table_list, headers=non_br_header, tablefmt='psql', floatfmt=fmt))
-
     # record priors
     pickle_write(rpps_priors_params, os.path.join(subset_dir, bone_prior_params_file))
 
@@ -630,21 +562,6 @@ def pdf_likelihood_combo_viz(subset, proportion_file, n_ratios, blen_std, proper
     os.makedirs(fig_dir, exist_ok=True)
 
     if plot_properties:
-        # Plot pose orientation and location
-        SPS_FIG, SPS_AXS = plt.subplots(nrows=2, ncols=3, subplot_kw={'projection':'3d'}, num='3DPPlots', figsize=(9, 6),)
-        col_tags = ['Frequency', 'Likelihood', 'Log-Likelihood']
-        title = 'Pose Orientation and Location'
-        for idx in range(len(data_to_plot)):
-            axes = (-1,1) if idx==0 else (-2, 2)
-            z_axis = (-1,1) if idx==0 else (0, 8)
-            plot_axis = True if idx==0 else False
-            for wgt_idx in range(2, 5):
-                col_idx = wgt_idx - 2
-                sb_tag = data_to_plot[idx][0]+' '+col_tags[col_idx]
-                render_joint_mobility(sb_tag, data_to_plot[idx][1], data_to_plot[idx][wgt_idx], title, '3DPPlots',
-                        None, (None, None), nms_tag, SPS_AXS[idx, col_idx], SPS_FIG, fig_dir, plot_axis=plot_axis,
-                        axis_lim=axes, z_lim=z_axis, change_view=False, alpha=0.5, activate_fig=True, save_fig=False)
-
         # Plot bone proportion range
         SPS_FIG, SPS_AXS, FIG_IDS = [None]*2, [None]*2, ['pdfl','lkli']
         n_rows, n_cols = prop_fig_rowvcol[len(ordered_bone_prop_tags)]
@@ -683,7 +600,7 @@ def pdf_likelihood_combo_viz(subset, proportion_file, n_ratios, blen_std, proper
 
 def mv_pdf_fbvec_likelihood_viz(subset='S1.S5.S6.S7.S8', type='fbj_orients', n_fbs=12, op_tag='_tch', frt_tag='',
                 cov_type='noctr', assume_ctr=True, augment=True, grp_jnts=True, rbo_type='rmtx', quintuple=False,
-                duplicate=0, log_spread=1., cross_plot_wgt=True, dom_angle_step=1, fmt=".7f"):
+                log_spread=1., cross_plot_wgt=True, dom_angle_step=1, fmt=".7f"):
     # multi-variate probability-density-function unit-vector derived likelihood (JME)
     # Computes the probability density for the multivariate 'normal' distribution of free-limb unit-vector
     # from mean-per-axis-component (3,1) and covariance matrix (3,3) per joint of non-maximum suppressed subset.
@@ -691,20 +608,18 @@ def mv_pdf_fbvec_likelihood_viz(subset='S1.S5.S6.S7.S8', type='fbj_orients', n_f
     properties_logged = {}
     jmc_priors_params = {'jnt_rank_sets':[{},{}], 'fb_covariance':[{},{}], 'fb_inv_covariance':[{},{}],
                          'fb_axes_means':[{},{}], 'fb_logli_metadata':[{},{}], 'summary_log':''}  #[[None]*12,[None]*11]
-    # nms_tag = str(d_nms).replace("0.", ".")
+
     fbq_tag = 5 if quintuple else 4
     aug_tag = 'wxaug' if augment else 'nouag'
     grp_tag = 'grpjnt' if grp_jnts else 'perjnt'
-    dup_tag = '' if duplicate==0 else '+{}'.format(duplicate)
     cvc_tag = '{}{}cv'.format(cov_type, int(assume_ctr)) # mcd-cv vs. mle-cv # 0:assume_centered=False 1:assume_centered=True
     cvc_tag = cov_type if cov_type=='noctr' else cvc_tag # 'noctr' with assume_ctr=True
     subset_dir = os.path.join('../priors', subset)
     fbjnt_prior_property_file = '{}{}_{}{}_{}_{}_{}{}.pickle'.\
         format(type, frt_tag, rbo_type, fbq_tag, aug_tag, n_fbs, grp_tag, op_tag)
-    type_prefix = 'rpbo' if type=='RP-BoneOrient' else 'fb'
-    fbjnt_prior_params_file = '{}_prior_params_{}{}_{}{}_{}_{}_{}{}_{:.0e}.pickle'.\
-        format(type_prefix, frt_tag, cvc_tag, rbo_type, fbq_tag, aug_tag, n_fbs, grp_tag, dup_tag, log_spread)
-    fbjnt_prior_figure_dir = '{}_{}_nms{}{}_{}_ls{:.0e}'.format(type_prefix, cvc_tag, nms_tag, frt_tag, rbo_type, log_spread)
+    fbjnt_prior_params_file = 'fb_prior_params_{}{}_{}{}_{}_{}_{}_{:.0e}.pickle'.\
+        format(frt_tag, cvc_tag, rbo_type, fbq_tag, aug_tag, n_fbs, grp_tag, log_spread)
+    fbjnt_prior_figure_dir = 'fb_{}_nms{}{}_{}_ls{:.0e}'.format(cvc_tag, nms_tag, frt_tag, rbo_type, log_spread)
     n_rows, n_cols = 2, 5 if grp_jnts else 8 # 4 OR 6
     n_fg = 3 #6 # number of fig groups
     SPS_FIG, SPS_AXS = [None]*2*n_fg, [None]*2*n_fg
@@ -745,10 +660,6 @@ def mv_pdf_fbvec_likelihood_viz(subset='S1.S5.S6.S7.S8', type='fbj_orients', n_f
             free_bone_orient = np.concatenate(symm_fb_uvecs_list, axis=0) # was free_bone_uvecs
         else:
             free_bone_orient = jmc_prior_src[fbjnt_tag] # (?, 3:[x, y, z]) cartesian coordinate system
-            # if duplicate>0 then free_bone_orient is repeated 2^(duplicate)
-            for dup_idx in range(duplicate):
-                print('\tduplicating 2^{} times..'.format(dup_idx+1))
-                free_bone_orient = np.concatenate([free_bone_orient, free_bone_orient], axis=0)
 
         # Compute mean and covariance matrix of joint's free-limb unit vector components' distribution
         dom_pts_coords, dom_pts_ftrvec = spherical_pts_coords, spherical_pts_ftrvec
@@ -891,7 +802,7 @@ def mv_pdf_fbvec_likelihood_viz(subset='S1.S5.S6.S7.S8', type='fbj_orients', n_f
     # record priors
     pickle_write(jmc_priors_params, os.path.join(subset_dir, fbjnt_prior_params_file))
 
-    plt_tags = ('', grp_tag, wgt_tag, dup_tag)
+    plt_tags = ('', grp_tag, wgt_tag)
     fig_dir = os.path.join('../images', subset, fbjnt_prior_figure_dir)
     os.makedirs(fig_dir, exist_ok=True)
     info_table_list = []
@@ -1018,132 +929,14 @@ def parameterize_jmc_priors(component_tag, free_bone_orient, cov_type, assume_ct
     return mean_per_axis, covariance_mtx, covariance_inv, msg
 
 
-def self_sup_losses_and_weights():
-    warmup_end = {'S1.001':128,'S1.01':25,'S1.05':5,'S1.1':5,'S1.5':4,'S1':4,'S1.S5':3,'S1.S5.S6':3,'S1.S5.S6.S7.S8':2}
-    loss_ids = ['Traj-trn','3D-trn','3D-trn-eval','3D-valid','2D-trn','MBLE-trn','BSE-trn','BPE-trn','JME-trn','PTO-trn']
-    all_loss_idxs = [0,1,2,3,4,5,9,6,7,8] # 3dt, 3dp, 3de, 3dv, 2d, mble, cmp, bse, bpe, jme
-    self_sup_idxs = [4,5,6,7,8,9] # 2d, mble, cmp, bse, bpe, jme
-    full_sup_idxs = [6,7,8,9,1] # cmp, bse, bpe, jme, 3dp
-    print("Enter supervised subset and lr_decay to run (eg. 'dir:gt_2d,subset:S1.1,prior_code:200,lr:0.001,lr_decay:0.95')")
-    exp_dir, sup_subset, priors_code, lr_str, lr_decay_str = input().split(",")
-    if sup_subset.find('_')<0: start_idx = warmup_end[sup_subset] # epoch index after warmup
-    else: start_idx = warmup_end[sup_subset[0:sup_subset.find('_')]] # epoch index after warmup
-    ndarray = np.load("../experiments/{}/{}/{}/per_epoch_avg_losses.npy". format(exp_dir, sup_subset, priors_code))
-    if ndarray.shape[0]<10:
-        # losses for full-supervision without Traj-trn, 2D-trn, BLE-trn
-        losses_ndarray = np.zeros((10, ndarray.shape[1]), dtype=np.float32)
-        losses_ndarray[[1,2,3,6,7,8,9],:] = ndarray
-    else: losses_ndarray = ndarray
-    losses_ndarray = losses_ndarray[all_loss_idxs,:] # reorder
-    loss_ids = [loss_ids[idx] for idx in all_loss_idxs] # reorder
-    n_epochs = losses_ndarray.shape[1]
-    # apply learning rate with decay
-    lr = float(lr_str)
-    gp_n_1 = np.arange(n_epochs) # (n) equivalent to (n-1) in geometric progression formula
-    gp_r_n_1 = np.power(float(lr_decay_str), gp_n_1) # (n)
-    gp_an_lr = lr * gp_r_n_1 # (4,n)
-    losses_ndarray = losses_ndarray * gp_an_lr
-    losses_ndarray = losses_ndarray[:,start_idx:]
-    sup_combo_sota = np.sum(losses_ndarray[:2,:], axis=0) # 3d+traj
-    self_sup_sota = np.sum(losses_ndarray[4:6,:], axis=0) # 2d+ble
-    nw_epochs = losses_ndarray.shape[1]
-    self_sup_combo_loss = np.sum(losses_ndarray[self_sup_idxs,:], axis=0) # 2dp+ble+cmp+bse+bpe+jme
-    ss_regularizer_loss = np.sum(losses_ndarray[self_sup_idxs[1:],:], axis=0) # ble+cmp+bse+bpe+jme
-    x_epochs = np.arange(nw_epochs) + start_idx+1
-    print('total epochs:{}, warm-up epochs:{}, post warmup epochs:{}, lr_decay:{}'.
-          format(n_epochs, start_idx, nw_epochs, lr_decay_str))
-
-    sps_fig, sps_axs = plt.subplots(nrows=2, ncols=2, num='interactive_plot', figsize=(11, 9))
-    plt.figure('interactive_plot')
-    sps_fig.suptitle('{} Losses: Raw vs. Weighted'.format(sup_subset), fontweight='bold', size=12)
-    sps_fig.tight_layout(pad=5.0)
-
-    sps_axs[0][0].plot(x_epochs, losses_ndarray[0], color='C1') # traj-trn
-    sps_axs[0][0].plot(x_epochs, losses_ndarray[1], color='C0') # 3d-trn
-    sps_axs[0][0].plot(x_epochs, losses_ndarray[4], color='C2') # 2d-trn
-    sps_axs[0][0].plot(x_epochs, losses_ndarray[5], '--', color='C3') # ble
-    sps_axs[0][0].plot(x_epochs, losses_ndarray[6], color='C7') # cmp
-    sps_axs[0][0].plot(x_epochs, losses_ndarray[7], color='C4') # bse
-    sps_axs[0][0].set(title='Loss Terms', ylabel='Avg. Loss')
-    sps_axs[0][0].legend(loss_ids[:2]+loss_ids[4:8])
-    sps_axs[0][0].set_yscale('log')
-    sps_axs[0][0].grid()
-
-    sps_axs[0][1].plot(x_epochs, losses_ndarray[8], color='C6')
-    sps_axs[0][1].plot(x_epochs, losses_ndarray[9], color='C5')
-    sps_axs[0][1].plot(x_epochs, self_sup_combo_loss, color='C7')
-    sps_axs[0][1].plot(x_epochs, ss_regularizer_loss, color='C8')
-    sps_axs[0][1].set(title='Regularizers', ylabel='Avg. Loss')
-    sps_axs[0][1].legend(loss_ids[8:]+['Self-Sup.','Reg-Losses'])
-    sps_axs[0][1].set_yscale('symlog')
-    sps_axs[0][1].grid()
-
-    gp_n_1 = np.arange(nw_epochs).reshape((1,-1)) # (1,n) equivalent to (n-1) in geometric progression formula
-    self_sup_wgts = np.ones((7,1), dtype=np.float32) # [2dp, mble, cmp, bse, bpe, jme, 3dp]
-    self_sup_wgt_decay = np.ones((6,1), dtype=np.float32) # [2dp, mble, cmp, bse, bpe, jme]
-    while True:
-        # relevant to fully-supervised only
-        wgt_sup_combo_losses = np.sum(losses_ndarray[full_sup_idxs,:] * self_sup_wgts[2:], axis=0) # cmp+bse+bpe+jme+3dp
-
-        gp_r_n_1 = np.power(self_sup_wgt_decay, gp_n_1) # (4,n)
-        gp_an_wgt = self_sup_wgts[:6] * gp_r_n_1 # (4,n)
-        wgt_self_sup_losses = losses_ndarray[self_sup_idxs,:] * gp_an_wgt
-        wgt_self_sup_combo_loss = np.sum(wgt_self_sup_losses, axis=0)
-        wgt_reg_losses = np.sum(wgt_self_sup_losses[2:,:], axis=0) # cmp+bse+bpe+jme
-        wgt_2dpvlog_ratios = np.abs(np.sum(wgt_self_sup_losses[4:], axis=0)) / wgt_self_sup_losses[0] # (bpe+jme) / 2dp
-        wgt_2dpvlog_ratios *= lr*0.1 # just to scale to plot
-
-        sps_axs[1][0].clear()
-        sps_axs[1][0].plot(x_epochs, sup_combo_sota, color='C1')
-        sps_axs[1][0].plot(x_epochs, wgt_sup_combo_losses, color='C0')
-        sps_axs[1][0].plot(x_epochs, self_sup_sota, color='C3')
-        sps_axs[1][0].plot(x_epochs, wgt_self_sup_combo_loss, color='C2')
-        sps_axs[1][0].set(title='Combined Supervised vs. Semi-Supervised.', xlabel='Epochs', ylabel='Avg. Loss')
-        sps_axs[1][0].legend(['SOTA Sup.', 'Wgt. Sup.', 'SOTA Semi-Sup', 'Wgt. Self-Sup'])
-        sps_axs[1][0].set_yscale('symlog')
-        sps_axs[1][0].grid()
-
-        sps_axs[1][1].clear()
-        sps_axs[1][1].plot(x_epochs, wgt_reg_losses, color='C1')
-        sps_axs[1][1].plot(x_epochs, wgt_self_sup_losses[0], color='C2')
-        sps_axs[1][1].plot(x_epochs, wgt_self_sup_losses[1], color='C3')
-        sps_axs[1][1].plot(x_epochs, wgt_self_sup_losses[2], color='C7')
-        sps_axs[1][1].plot(x_epochs, wgt_self_sup_losses[3], color='C4')
-        sps_axs[1][1].plot(x_epochs, wgt_self_sup_losses[4], color='C6')
-        sps_axs[1][1].plot(x_epochs, wgt_self_sup_losses[5], color='C5')
-        sps_axs[1][1].plot(x_epochs, wgt_2dpvlog_ratios, '--', color='black')
-        sps_axs[1][1].set(title='Weighted Semi-Supervised Losses', xlabel='Epochs', ylabel='Avg. Weighted Loss')
-        sps_axs[1][1].legend(['Wgt. Reg','Wgt. 2D','Wgt. BLE','Wgt. PTO','Wgt. BSE','Wgt. BPE','Wgt. JME','P.2D Ratio'])
-        sps_axs[1][1].set_yscale('symlog')
-        sps_axs[1][1].grid()
-        plt.pause(0.001)
-
-        # interact
-        print("Enter weights for self-supervised losses and weight decay:\n"
-              "p2d,ble,cmp,bse,bpe,jme,nat_d,pos_d,log_d,p3d Or 'q' to terminate")
-        self_sup_params_str = input()
-        if self_sup_params_str=='q': break
-        self_sup_params_num = self_sup_params_str.split(',')
-        if len(self_sup_params_num)==10:
-            for idx, numeral_str in enumerate(self_sup_params_num[:6]): self_sup_wgts[idx,0] = float(numeral_str)
-            self_sup_wgt_decay[:2] = float(self_sup_params_num[6])
-            self_sup_wgt_decay[2:4] = float(self_sup_params_num[7])
-            self_sup_wgt_decay[4:] = float(self_sup_params_num[8])
-            self_sup_wgts[6] = float(self_sup_params_num[9])
-            print('  wgts:{}, wgt-decay:[{:.4f}, {:.4f}, {:.4f}], p3d:{:.2f}'.format(self_sup_wgts[:6,0],
-                    self_sup_wgt_decay[1, 0], self_sup_wgt_decay[3, 0], self_sup_wgt_decay[5, 0], self_sup_wgts[6,0]))
-        else:
-            print('len(self_sup_params_num) should be 8 not {}'.format(len(self_sup_params_num)))
-
-
 
 if __name__ == '__main__':
-    d_nms = 0.05 # 0.01, 0.025, 0.05
-    dups = 1
+    subset_str = sys.argv[1]
+    group_props = bool(sys.argv[2])  # False
+    group_fbjnts = bool(sys.argv[3])  # True
+
+    d_nms = 0.05
     quintuple = False
-    group_props = False # *False
-    group_fbjnts = False # *True
-    print_metadata = False
     nms_tag = str(d_nms).replace("0.", ".")
     prop_fig_rowvcol = {9:(3,3), 10:(2,5), 15:(3,5), 114:(19,6)}
 
@@ -1167,20 +960,8 @@ if __name__ == '__main__':
     blen_comp_tags = ['R-Hip','R-Thigh','R-Leg','L-Hip','L-Thigh','L-Leg','Abdomen','Vertebra',
                       'Head','UFace','L-Shoulder','L-Bicep','L-Forearm','R-Shoulder','R-Bicep','R-Forearm']
 
-    mv_pdf_fbvec_likelihood_viz('S1', 'RP-BoneOrient', 16, frt_tag='', grp_jnts=group_fbjnts,
-                                quintuple=quintuple, duplicate=dups, cross_plot_wgt=False)
-    pdf_likelihood_combo_viz('S1', 'RP-PoseStruct_{}_{}_{}{}_m{}.pickle',9, .05, frt_tag='', grp_props=group_props)
-
-    self_sup_losses_and_weights()
-
-    if print_metadata:
-        pdir = '../priors/S1'
-        filepath = os.path.join('{}/bone_priors_{}_{}_br_{}_{:.0e}.pickle'.format(pdir, 'wxaug', 15, 'grpprp', 1))
-        bpe_priors_params = pickle_load(filepath)
-        print('\nBPC\n{}\n'.format(bpe_priors_params['summary_log']))
-
-        filepath = os.path.join('{}/fbj_priors_{}{}{}_{}_{:.0e}.pickle'.format(pdir, '', 'noctr', '_wxaug_16', 'grpjnt', 1))
-        jme_priors_params = pickle_load(filepath)
-        print('\nJMC\n{}\n'.format(jme_priors_params['summary_log']))
+    mv_pdf_fbvec_likelihood_viz(subset_str, 'fbj_orients', 16, frt_tag='', grp_jnts=group_fbjnts,
+                                quintuple=quintuple, cross_plot_wgt=False)
+    pdf_likelihood_combo_viz(subset_str, 'bone_ratios_{}_{}_{}{}_m{}.pickle', 15, .05, frt_tag='', grp_props=group_props)
 
     print('\n All done.\n')

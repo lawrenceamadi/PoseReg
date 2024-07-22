@@ -14,8 +14,7 @@ from scipy.special import softmax
 sys.path.append('../')
 from agents.helper import *
 from agents.visuals import plot_3d_pose
-from agents.rbo_transform_np import save_bone_prior_properties, save_jmc_priors, are_freebones_similar, quaternion_rotate
-from agents.rbo_transform_np import save_pose_structure_prior_properties
+from agents.rbo_transform_np import save_bone_prior_properties, save_jmc_priors, quaternion_rotate
 from agents.rbo_transform_tc import log_likelihood_loss_func, torch_t, guard_div1, to_numpy, FreeBoneOrientation
 
 from agents.helper import processor
@@ -23,21 +22,21 @@ from agents.helper import processor
 
 def pose_reg_properties_extractor(train_generator, args, supr_subset_tag, frt_tag):
     log_jmc_meta = True
-    log_bpc_meta = False
+    log_bpc_meta = True
     log_bse_meta = False
     log_blen_meta = False
-    visualize_pose = True
+    visualize_pose = False
     n_viz_subplots = 16 # 16 or 18
     is_torch_op = args.gen_pose_priors >= -2
-    induce_varying_bone_lengths = True#len(subjects_train)<=3
-    blen_std = 0.05 #*** was .01 [09/03/22], paper .05
+    induce_varying_bone_lengths = True
+    blen_std = 0.05
     bone_metadata = {'bone_lengths':[], 'bone_symms':[], 'bone_ratios':[]}
     JMC_JOINT_CONFIG = eval('JMC_{}_JOINT_CONFIG'.format(args.jmc_fbo_ops_type.upper()))
     ordered_joint_names = list(JMC_JOINT_CONFIG.keys())
 
     fb_orientation_vecs = {}
     for joint_name in ordered_joint_names:
-        fb_orientation_vecs[joint_name] = [] # was joint_id
+        fb_orientation_vecs[joint_name] = []
 
     if visualize_pose:
         n_rows, n_cols = (3, 6) if n_viz_subplots==18 else (2, 8)
@@ -55,7 +54,7 @@ def pose_reg_properties_extractor(train_generator, args, supr_subset_tag, frt_ta
             'LHip':(1,2), 'LThigh':(1,3), 'LLeg':(1,4), 'LShoulder':(1,5), 'LBicep':(1,6), 'LForearm':(1,7)}
         FIG_BONE_ORDER = FIG_BONE18_ORDER if n_viz_subplots==18 else FIG_BONE16_ORDER
 
-        # Extract and organize Pose Priors configuration parameters
+    # Extract and organize Pose Priors configuration parameters
     n_fbjnts = len(ordered_joint_names) # -->fbj
     quad_kpt_idxs_rmtx, xy_yx_axis_dirs, xy_yx_idxs, z_axis_ab_idxs, yx_axis_ab_idxs, nr_fb_idxs, _, _ = fboa_rotamatrix_config(
         JMC_RMTX_JOINT_CONFIG, ordered_joint_names, args.group_jmc, args.quintuple, for_torch=is_torch_op)
@@ -125,9 +124,6 @@ def pose_reg_properties_extractor(train_generator, args, supr_subset_tag, frt_ta
         # collect jmc metadata
         if log_jmc_meta:
             # necessary to convert coordinates from meters to millimeters
-            #if is_torch_op: inputs_3d_mm = inputs_3d * torch_t(1000)
-            #else: inputs_3d_mm = inputs_3d * 1000
-
             rmtx_quadruplet_kpts = inputs_3d[:,:,quad_kpt_idxs_rmtx,:] # (?,f,17,3)->(?,f,fbj,4,3)
             rmtx_pivot_kpts, rotation_mtxs_3x3, _, rmtx_free_bone_uvecs = \
                 rot_matrix_fb(rmtx_quadruplet_kpts) # (?,f,j,4,3)->((?,f,j,1,3), (?,f,j,3,3), (?,f,j,4,4), (?,f,j,3))
@@ -135,7 +131,6 @@ def pose_reg_properties_extractor(train_generator, args, supr_subset_tag, frt_ta
             quat_pivot_kpts, quaternion_vec1, quaternion_vec2, quat_free_bone_uvecs = \
                 quaternion_fb(quat_quadruplet_kpts) # (?,f,j,4,3)->((?,f,j,1,3), (?,f,j,3,3), (?,f,j,4,4), (?,f,j,3))
 
-            #are_freebones_similar(rmtx_free_bone_uvecs, quat_free_bone_uvecs)
             free_bone_uvecs = rmtx_free_bone_uvecs if args.jmc_fbo_ops_type=='rmtx' else quat_free_bone_uvecs
 
             jnt_cnt += n_supr_samples*n_supr_frames*n_fbjnts
@@ -180,7 +175,7 @@ def pose_reg_properties_extractor(train_generator, args, supr_subset_tag, frt_ta
                     plot_3d_pose(upright_pose, SP_FIG2, SP_AXS2[2,5], 'Upright-Pose', KPT_2_IDX, [-1]*4, t_tag='Quaternion ')
                     plot_3d_pose(pose_wrt_cam_frm, SP_FIG, SP_AXS[2,4], 'Camera-Pose', KPT_2_IDX, [-1]*4)
                     plot_3d_pose(upright_pose, SP_FIG, SP_AXS[2,5], 'Upright-Pose', KPT_2_IDX, [-1]*4, t_tag='Rot-Matrix ', display=True)
-                sys.exit(0)
+                # sys.exit(0)
 
         batch_cnt += 1
         if args.gen_pose_priors<=-2 and batch_cnt%100==0:
@@ -197,189 +192,6 @@ def pose_reg_properties_extractor(train_generator, args, supr_subset_tag, frt_ta
     if args.gen_pose_priors<=-2 and log_jmc_meta:
         save_jmc_priors(fb_orientation_vecs, ordered_joint_names, n_fbjnts, args,
                         supr_subset_tag, frt_tag, JMC_JOINT_CONFIG, from_torch=is_torch_op)
-
-    print("Done.\n\njnt_meta_min:\n{}\n\njnt_meta_max:\n{}".format(jnts_meta_min, jnts_meta_max))
-
-
-def extract_pose_properties_for_build(train_generator, args, supr_subset_tag, frt_tag):
-    log_jmc_meta = True # 16x3 bone orientations
-    log_bpc_meta = True # 9 bone ratios, ie. 16-(6+1): excluding half of symmetric bones (left-side) and lower-spine bone
-    log_bse_meta = True # 6 normalized difference (diff/right-len) of 6 pairs of symmetric bones
-    log_tlen_meta = True # 1 length of torso, ie. thorax + abdomen bone length
-    log_ploc_meta = True # 1x3 position of pose wrt camera as the location of pelvis joint
-    log_pori_meta = True # 1x3, orientation of pose wrt camera as the vector normal to Nck->Plv->RHp plane
-    visualize_pose = False
-    induce_varying_bone_lengths = True#len(subjects_train)<=3
-    n_viz_subplots = 16 # 16 or 18
-    ordered_joint_names_for_jm = list(BONE_ALIGN_CONFIG.keys())
-    ordered_bone_names_for_bp = CENTERD_BONES[0:3] + RGT_SYM_BONES # (9,) excluding lower-spine/abdomen and left symmetric bones
-    ordered_symm_bone_names = [name[1:len(name)] for name in RGT_SYM_BONES] # (6,)
-    bpc_bone_idxs = CENTERD_BONE_INDEXES[0:3] + RGT_SYM_BONE_INDEXES # (9,) excluding lower-spine/abdomen bone
-    torso_bone_idxs = CENTERD_BONE_INDEXES[2:4] # thorax/upper-spine and abdomen/lower-spine
-    nck_idx, spn_idx, plv_idx, rhp_idx = KPT_2_IDX['Nck'], KPT_2_IDX['Spn'], KPT_2_IDX['Plv'], KPT_2_IDX['RHp']
-    blen_std = 0.05 #*** was .01 [09/03/22], paper .05
-
-    fb_orientation_vecs = {}
-    for joint_name in ordered_joint_names_for_jm:
-        fb_orientation_vecs[joint_name] = [] # was joint_id
-    pose_metadata = {'bone_symms':[], 'torso_lens':[], 'b2t_ratios':[], 'pose_locat':[], 'pose_orients':[]}
-
-    if visualize_pose:
-        n_rows, n_cols = (3, 6) if n_viz_subplots==18 else (2, 8)
-        figsize_wxh = (15, 10) if n_viz_subplots==18 else (20, 8)
-        SP_FIG, SP_AXS = plt.subplots(n_rows, n_cols, subplot_kw={'projection':'3d'}, figsize=figsize_wxh)
-        SP_FIG.subplots_adjust(left=0.0, right=1.0, wspace=-0.0)
-        FIG_BONE18_ORDER = {
-            'Abdomen':(0,0), 'Thorax':(0,1), 'Head':(0,2), 'UFace':(0,3), 'RHip':(0,4), 'LHip':(0,5),
-            'RShoulder':(1,0), 'LShoulder':(1,1), 'RLeg':(1,2), 'LLeg':(1,3), 'RThigh':(1,4), 'LThigh':(1,5),
-            'RBicep':(2,0), 'LBicep':(2,1), 'RForearm':(2,2), 'LForearm':(2,3), 'Camera-Pose':(2,4), 'Upright-Pose':(2,5)}
-        FIG_BONE16_ORDER = {'UFace':(0,0), 'Head':(0,1), 'Thorax':(1,0), 'Abdomen':(1,1),
-                            'RHip':(0,2), 'RThigh':(0,3), 'RLeg':(0,4), 'RShoulder':(0,5), 'RBicep':(0,6), 'RForearm':(0,7),
-                            'LHip':(1,2), 'LThigh':(1,3), 'LLeg':(1,4), 'LShoulder':(1,5), 'LBicep':(1,6), 'LForearm':(1,7)}
-        FIG_BONE_ORDER = FIG_BONE18_ORDER if n_viz_subplots==18 else FIG_BONE16_ORDER
-
-    # Extract and organize Pose Priors configuration parameters
-    n_fbjnts = len(ordered_joint_names_for_jm) # -->fbj
-    quad_kpt_idxs_rmtx, xy_yx_axis_dirs, xy_yx_idxs, z_axis_ab_idxs, yx_axis_ab_idxs, nr_fb_idxs, _, _ = fboa_rotamatrix_config(
-        BONE_ALIGN_CONFIG, ordered_joint_names_for_jm, args.group_jmc, args.quintuple, for_torch=True)
-    rot_matrix_fb = FreeBoneOrientation(args.batch_size, xy_yx_axis_dirs, z_axis_ab_idxs, yx_axis_ab_idxs, xy_yx_idxs,
-                                        n_fbs=n_fbjnts, quintuple=args.quintuple, validate_ops=True, rot_tfm_mode=0,
-                                        nr_fb_idxs=nr_fb_idxs, ret_mode=-1)
-
-    jnt_cnt = 0
-    batch_cnt = 1
-    n_bones = 16
-    n_bones_for_bp = len(ordered_bone_names_for_bp)
-    jnts_meta_max = np.zeros((n_fbjnts,3), dtype=np.float32) #8
-    jnts_meta_min = np.full((n_fbjnts,3), dtype=np.float32, fill_value=np.inf) #8
-    print('[INFO] Generating Pose Prior properties from reconstructing 3D pose..')
-    if args.gen_pose_priors<=-2: os.makedirs(os.path.join('priors', supr_subset_tag, 'properties'), exist_ok=True)
-
-    # Iterate over 3D-pose ground-truths and collect bone-length and joint orientation priors
-    for _, batch_3d, _ in train_generator.next_epoch():
-        n_supr_samples, n_supr_frames = batch_3d.shape[:2]
-        inputs_3d = batch_3d.astype(np.float32) # (?,f,17,3)
-
-        # collect pose location metadata
-        if log_ploc_meta:
-            # Note, copy is necessary otherwise, values are overridden when set to 0 later
-            pose_metadata['pose_locat'].append(np.copy(inputs_3d[:,:,0])) # (?,f,3)
-
-        # Pose post processing **IMPORTANT**
-        inputs_3d[:,:,0] = 0  # necessary to orient pose at pelvis irrespective of trajectory
-
-        # collect pose orientation metadata
-        if log_pori_meta:
-            whole_spine_bones = inputs_3d[:,:,nck_idx] - inputs_3d[:,:,plv_idx] # (?,f,3)
-            right_waist_bones = inputs_3d[:,:,rhp_idx] - inputs_3d[:,:,plv_idx] # (?,f,3)
-            normal_vecs = np.cross(whole_spine_bones, right_waist_bones, axis=-1) # (?,f,3)
-            vec_magnitudes = np.linalg.norm(normal_vecs, axis=-1, keepdims=True) # (?,f,1)
-            # Safe division to avoid division-by-zero
-            # If you don't pass `out` the indices where (b == 0) will be uninitialized!
-            normal_unit_vecs = np.divide(normal_vecs, vec_magnitudes, out=np.zeros_like(normal_vecs), where=vec_magnitudes!=0)
-            pose_metadata['pose_orients'].append(normal_unit_vecs) # (?,f,3)
-
-        inputs_3d = torch.from_numpy(inputs_3d.astype('float32')).to(processor)
-
-        if log_bse_meta or log_bpc_meta or log_tlen_meta:
-            dists_m = inputs_3d[:, :, BONE_CHILD_KPTS_IDXS] - inputs_3d[:, :, BONE_PARENT_KPTS_IDXS] # -->(?,f,16,3)
-            all_bone_lengths_m = torch.linalg.norm(dists_m, dim=3)  # (?,f,16,3) --> (?,f,16)
-            assert (torch.all(torch.ge(all_bone_lengths_m, 0.))), "shouldn't be negative {}".format(all_bone_lengths_m)
-
-            # Induce varying bone lengths
-            # this is done to generate varying pose metadata from a limited number of subjects (6 or less in H36M)
-            # Note: use the same scale factors for symmetric bones
-            if induce_varying_bone_lengths:
-                bone_indexes = list(range(n_bones))
-                bone_gaussian_factors = torch.zeros((n_supr_samples,n_supr_frames,n_bones),
-                                                    dtype=torch.float32, device=torch.device(processor)) # (?,f,16)
-                for idx in range(n_bones-6):
-                    gaussian_factors = torch.normal(mean=1, std=blen_std, size=(n_supr_samples, n_supr_frames))
-                    if idx<6: # first 6 guassian_factors are assigned to symmetric bones
-                        rgt_bone_idx = VPOSE3D_BONE_ID_2_IDX[RGT_SYM_BONES[idx]]
-                        bone_gaussian_factors[:,:,rgt_bone_idx] = gaussian_factors
-                        lft_bone_idx = VPOSE3D_BONE_ID_2_IDX[LFT_SYM_BONES[idx]]
-                        bone_gaussian_factors[:,:,lft_bone_idx] = gaussian_factors
-                        bone_indexes.remove(rgt_bone_idx)
-                        bone_indexes.remove(lft_bone_idx)
-                    else:
-                        ctr_bone_idx = VPOSE3D_BONE_ID_2_IDX[CENTERD_BONES[idx-6]]
-                        bone_gaussian_factors[:,:,ctr_bone_idx] = gaussian_factors
-                        bone_indexes.remove(ctr_bone_idx)
-                assert (len(bone_indexes)==0), 'bone_indexes: {}'.format(bone_indexes)
-                all_bone_lengths_m *= bone_gaussian_factors # (?,f,16)
-                assert (torch.all(torch.ge(all_bone_lengths_m, 0.))), "shouldn't be negative {}".format(all_bone_lengths_m)
-
-            # collect bsc metadata
-            if log_bse_meta:
-                bone_sym_diffs = all_bone_lengths_m[:,:,RGT_SYM_BONE_INDEXES] - all_bone_lengths_m[:,:,LFT_SYM_BONE_INDEXES] # (?,f,6)
-                norm_sym_diffs = guard_div1(bone_sym_diffs, all_bone_lengths_m[:,:,RGT_SYM_BONE_INDEXES]) # (?,f,6)
-                pose_metadata['bone_symms'].append(to_numpy(norm_sym_diffs))
-
-            # collect bpc metadata
-            if log_bpc_meta:
-                torso_bone_lens = torch.sum(all_bone_lengths_m[:,:,torso_bone_idxs], dim=-1, keepdim=True) # (?,f,1)
-                select_bone_ratios = guard_div1(all_bone_lengths_m[:,:,bpc_bone_idxs], torso_bone_lens) # (?,f,9)
-                pose_metadata['b2t_ratios'].append(to_numpy(select_bone_ratios))
-
-            # collect torso length metadata
-            if log_tlen_meta:
-                if not log_bpc_meta:
-                    torso_bone_lens = torch.sum(all_bone_lengths_m[:,:,torso_bone_idxs], dim=-1) # (?,f)
-                    pose_metadata['torso_lens'].append(torso_bone_lens) # (?,f)
-                else: pose_metadata['torso_lens'].append(to_numpy(torso_bone_lens[:,:,0])) # (?,f)
-
-        # collect jmc metadata
-        if log_jmc_meta:
-            # necessary to convert coordinates from meters to millimeters
-            rmtx_quadruplet_kpts = inputs_3d[:,:,quad_kpt_idxs_rmtx,:] # (?,f,17,3)->(?,f,fbj,4,3)
-            rmtx_pivot_kpts, rotation_mtxs_3x3, _, free_bone_uvecs = \
-                rot_matrix_fb(rmtx_quadruplet_kpts) # (?,f,j,4,3)->((?,f,j,1,3), (?,f,j,3,3), (?,f,j,4,4), (?,f,j,3))
-
-            jnt_cnt += n_supr_samples*n_supr_frames*n_fbjnts
-            for j_idx, joint_name in enumerate(ordered_joint_names_for_jm):
-                jmc_metadata = free_bone_uvecs[:,0,j_idx,:] # (?,3)
-                fb_orientation_vecs[joint_name].append(jmc_metadata)
-                # log max and min
-                jmc_metadata_min = np.min(jmc_metadata, axis=0)
-                jmc_metadata_max = np.max(jmc_metadata, axis=0)
-                jnts_meta_min[j_idx] = np.where(jmc_metadata_min<jnts_meta_min[j_idx], jmc_metadata_min, jnts_meta_min[j_idx])
-                jnts_meta_max[j_idx] = np.where(jmc_metadata_max>jnts_meta_max[j_idx], jmc_metadata_max, jnts_meta_max[j_idx])
-
-            if visualize_pose:
-                smp_idx = 0
-                rmtx_pvt_kpts = rmtx_pivot_kpts[smp_idx, 0, :, 0]
-                rot_mtxs = rotation_mtxs_3x3[smp_idx, 0]
-                pose_wrt_cam_frm = to_numpy(inputs_3d[smp_idx,0])
-                for j_idx, joint_name in enumerate(ordered_joint_names_for_jm):
-                    row_idx, col_idx = FIG_BONE_ORDER[joint_name]
-                    # translate, then rotate
-                    pose_wrt_pvt_frm = pose_wrt_cam_frm - rmtx_pvt_kpts[[j_idx]] # translate to pivot
-                    pose_wrt_pvt_frm = np.matmul(rot_mtxs[j_idx], pose_wrt_pvt_frm.T).T # rotate about pivot
-                    jnt_quad_kpts_idxs = get_keypoints_indexes(BONE_ALIGN_CONFIG[joint_name][0])
-                    if len(jnt_quad_kpts_idxs)==5: jnt_quad_kpts_idxs.pop(3) # remove 2nd plane-kpt if quintuple
-                    plot_3d_pose(pose_wrt_pvt_frm, SP_FIG, SP_AXS[row_idx,col_idx], joint_name, KPT_2_IDX,
-                                 jnt_quad_kpts_idxs, t_tag='Rot-Matrix ', display=(n_viz_subplots==16 and j_idx==15))
-                if n_viz_subplots==18:
-                    # todo: instead of flipping, rotate 180" to reverse the effect of inverted camera projection?
-                    upright_pose = pose_wrt_cam_frm * [-1,-1,1] # to reverse effect of inverted camera projection on x & y comp.
-                    # todo: relative bone orientation alignment should be executed on upright_pose after reversing camera inversion
-                    plot_3d_pose(pose_wrt_cam_frm, SP_FIG, SP_AXS[2,4], 'Camera-Pose', KPT_2_IDX, [-1]*4)
-                    plot_3d_pose(upright_pose, SP_FIG, SP_AXS[2,5], 'Upright-Pose', KPT_2_IDX, [-1]*4, t_tag='Rot-Matrix ', display=True)
-                sys.exit(0)
-
-        batch_cnt += 1
-        if args.gen_pose_priors<=-2 and batch_cnt%100==0:
-            print('{:>17,} joints from {:>9,} poses or {:5,} batches passed..'.format(jnt_cnt, jnt_cnt//n_fbjnts, batch_cnt))
-        if n_supr_samples!=args.batch_size:
-            print('[INFO] batch:{} with size {} < {} standard batch-size'.format(batch_cnt, n_supr_samples, args.batch_size))
-
-    # save onetime logged pose priors
-    print('{:>17,} joints from {:>9,} poses or {:5,} batches passed..'.format(jnt_cnt, jnt_cnt//n_fbjnts, batch_cnt))
-    if args.gen_pose_priors<=-2 and (log_tlen_meta or log_bse_meta or log_bpc_meta):
-        save_pose_structure_prior_properties(pose_metadata, fb_orientation_vecs, BONE_ALIGN_CONFIG, args,
-                            ordered_joint_names_for_jm, ordered_bone_names_for_bp, ordered_symm_bone_names,
-                                             n_fbjnts, n_bones_for_bp, blen_std, supr_subset_tag, frt_tag)
 
     print("Done.\n\njnt_meta_min:\n{}\n\njnt_meta_max:\n{}".format(jnts_meta_min, jnts_meta_max))
 

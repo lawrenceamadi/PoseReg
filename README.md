@@ -1,5 +1,5 @@
-# Improving 3D human pose estimators with weakly supervised losses and biomechanical pose prior regularizers
-<p align="center"><img src="images/semi_supv_hpe.png" width="50%" alt="" /></p>
+# Improving 3D human pose estimators with weakly supervised losses and biomechanical pose regularizers
+<p align="center"><img src="images/semi_supv_hpe.png" width="80"  alt=""/></p>
 
 This is the implementation of the approach described in the papers:
 > Lawrence Amadi and Gady Agam. [PosturePose: Optimized Posture Analysis for Semi-Supervised Monocular 3D Human Pose Estimation](https://www.mdpi.com/1424-8220/23/24/9749). Intelligent Sensors Special Issue on “Deep Learning Applications for Pose Estimation and Human Action Recognition”, Sensors, 2023.
@@ -34,21 +34,47 @@ Make sure you have the following dependencies installed before proceeding:
 - Python 3+ distribution
 - PyTorch >= 0.11.0
 
+[//]: # (Todo: continue to edit from below:)
+
 ### Generating Biomechanical Pose Priors
-The pretrained models can be downloaded from AWS. Put `pretrained_h36m_cpn.bin` (for Human3.6M) and/or `pretrained_humaneva15_detectron.bin` (for HumanEva) in the `checkpoint/` directory (create it if it does not exist).
+Here are examples of runtime commands to generate bone proportion (BPC) and joint mobility (JMC) biomechanical constraint priors
+
+
 ```sh
-mkdir checkpoint
-cd checkpoint
-wget https://dl.fbaipublicfiles.com/video-pose-3d/pretrained_h36m_cpn.bin
-wget https://dl.fbaipublicfiles.com/video-pose-3d/pretrained_humaneva15_detectron.bin
-cd ..
+# To generate priors from 1% of subject S1 pose data; a subset (.16%) of Human3.6M training data
+# - with priors of symmetric joints (or free bones) grouped together
+python run_pr.py -k gt --subjects-train S1 --subset 0.01 -e 1 -b 1024 --generate-pose-priors -2 --n-bone-ratios 15
+
+# To generate priors from subject S1 pose data; a subset (16%) of Human3.6M training data
+python run_pr.py -k gt --subjects-train S1 -e 1 -b 1024 --generate-pose-priors -2 --n-bone-ratios 15 --per-free-bone-orient
+
+# To generate priors from subject S1, S5, and S6 pose data; a subset (57%) of Human3.6M training data
+# - with priors of symmetric joints (or free bones) grouped together
+python run_pr.py -k gt --subjects-train S1,S5,S6 -e 1 -b 1024 --generate-pose-priors -2 --n-bone-ratios 15
 ```
+
+### Visualize Biomechanical Pose Priors (BPC & JMC)
 [//]: # (This is a comment)
+```shell
+cd agents
+
+# To visualize generated pose priors from 1% of S1 (i.e., 'S1.01') 
+# - with per-bone BPC (i.e., '0') and grouped JMC (i.e., '1')
+python visuals.py S1.01 0 1
+
+# To visualize generated pose priors from S1 (i.e., 'S1') 
+# - with per-bone BPC (i.e., '0') and per-joint JMC (i.e., '0')
+python visuals.py S1 0 0
+
+# To visualize generated pose priors from S1 (i.e., 'S1') 
+# - with per-bone BPC (i.e., '0') and grouped JMC (i.e., '1')
+python visuals.py S1.S5.S6 0 1
+```
 #### Bone Proportion Constraint (BPC) biomechanical regularizer derived from S1 pose data
-<p align="center"><img src="images/s1_perprp_likli.png" width="70%" alt="" /></p>
+<p align="center"><img src="images/s1_perprp_likli.png" width="80" alt=""/></p>
 
 #### Joint Mobility Constraint (JMC) biomechanical regularizer derived from S1 pose data
-<p align="center"><img src="images/s1_perjnt_logli.gif" width="70%" alt="" /></p>
+<p align="center"><img src="images/s1_perjnt_logli.gif" width="100%" alt=""/></p>
 
 ![](images/demo_temporal.gif)
 
