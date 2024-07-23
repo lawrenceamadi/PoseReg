@@ -11,7 +11,6 @@ data/data_utils.py
 # User Defined Directories and Files
 *.npz
 *.mat
-*.png
 *.idea
 *_old
 **/properties/
