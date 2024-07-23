@@ -96,14 +96,14 @@ def parse_args():
                         help='enable joint mobility error term in unsupervised-branch of semi-supervised settings')
     parser.add_argument('-bpc-s', '--bpc-std', default=0.05, type=float, dest='induced_bonelen_std',
                         help='induced bone length standard deviation used to generate bpc bone ratios')
-    parser.add_argument('-jmc-r', '--jmc-ranks', default=1, type=int, help='max number of jmc ranks, from 1 to j')
+    parser.add_argument('-jmc-r', '--jmc-ranks', default=2, type=int, help='max number of jmc ranks, from 1 to j')
     parser.add_argument('-jmc-ot', '--jmc-fbo-ops-type', default='rmtx', type=str, dest='jmc_fbo_ops_type',
                         help='free-bone orientation operation used in jmc: "rmtx":rotation-matrix or "quat":quaternion')
     parser.add_argument('-qks-5', '--quintuple-kpt-set', action='store_true', dest='quintuple',
                         help='use 5 keypoints for bone orientation alignment of torso-bones')
     parser.add_argument('-pdf-cov', '--pdf-covariance-type', default='noctr', type=str, dest='pdf_covariance_type',
                         help='tag for the type covariance estimation used to generate prior params')
-    parser.add_argument('-mcv', '--multi-camera-views', default=3, type=int, dest='multi_cam_views',
+    parser.add_argument('-mcv', '--multi-camera-views', default=4, type=int, dest='multi_cam_views',
                         help='number of views in semi-supervised branch. mcv==1:single-view, 1<mcv<=4: multi-view')
     parser.add_argument('-mce-t', '--mce-type', default=-1.1, type=float, dest='mce_type',
                         help='mce formula; -4:PA-MPCE, -3:Fb-UVec-BLen, -2:Fb-UVec, -1:Fb-Vec, 0:Disable, 1:Ach-2-Each-Pos, 2:Adjacent-Pairs'

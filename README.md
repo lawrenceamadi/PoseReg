@@ -1,5 +1,6 @@
 # Improving 3D human pose estimators with weakly supervised losses and biomechanical pose regularizers
-<p align="center"><img src="images/semi_supv_hpe.png" width="80"  alt=""/></p>
+[//]: # (<p align="center"><img src="images/semi_supv_hpe.png" width="80"  alt=""/></p>)
+![Semi-supervised Framework](./images/semi_supv_hpe.png "Semi-supervised Framework")
 
 This is the implementation of the approach described in the papers:
 > Lawrence Amadi and Gady Agam. [PosturePose: Optimized Posture Analysis for Semi-Supervised Monocular 3D Human Pose Estimation](https://www.mdpi.com/1424-8220/23/24/9749). Intelligent Sensors Special Issue on “Deep Learning Applications for Pose Estimation and Human Action Recognition”, Sensors, 2023.
@@ -21,10 +22,12 @@ Training VideoPose3D with additional weakly supervised losses and regularizers. 
 | BSE + BPC + JMC + MvP&P | HRNet | 27 frames | 42.2 mm | 31.8 mm | 36.7 mm |
 
 #### Illustration of Bone Orientation Alignment necessary for JMC and MPBOE
-<p align="center"><img src="images/rboa_viz_16.png" width="70%" alt="" /></p>
+[//]: # (<p align="center"><img src="images/rboa_viz_16.png" width="70%" alt="" /></p>)
+![Bone Orientation Alignment](./images/rboa_viz_16.png)
 
 #### Visual comparison of Protocol 2 (P-MPJPE) and bone-orientation alignment-based errors (MPBOE and J-MPBOE)
-<p align="center"><img src="images/posture_protocols.png" width="70%" alt="" /></p>
+[//]: # (<p align="center"><img src="images/posture_protocols.gif" width="70%" alt="" /></p>)
+![Bone Orientation Alignment](./images/posture_protocols.gif)
 
 ## Quick start
 To get started, follow the instructions in https://github.com/facebookresearch/VideoPose3D to set up VideoPose3D (and access Human3.6M dataset). Then clone this repository and copy over files to the VideoPose3D source code; replacing duplicate files with our version.
@@ -71,34 +74,39 @@ python visuals.py S1 0 0
 python visuals.py S1.S5.S6 0 1
 ```
 #### Bone Proportion Constraint (BPC) biomechanical regularizer derived from S1 pose data
+![Likelihood of Bone Ratios](./images/s1_perprp_likli.png)
 <p align="center"><img src="images/s1_perprp_likli.png" width="80" alt=""/></p>
 
 #### Joint Mobility Constraint (JMC) biomechanical regularizer derived from S1 pose data
-<p align="center"><img src="images/s1_perjnt_logli.gif" width="100%" alt=""/></p>
+[//]: # (<p align="center"><img src="images/s1_perjnt_logli.gif" width="100%" alt=""/></p>)
+![Log-Likelihood of Bone Orientations](images/s1_perjnt_logli.gif)
 
-![](images/demo_temporal.gif)
 
-### Semi-supervised training from scratch
-If you want to reproduce the results of our pretrained models, run the following commands.
+### Semi-supervised training from scratch followed by evaluation on test set
+To perform semi-supervised training, you just need to add the `--subjects-unlabeled` argument. In the example below, we use ground-truth 2D poses as input, and train supervised on just 100% of Subject 1. The remaining subjects are treated as unlabeled data and are used for semi-supervision.
+Note, to train supervised on a fraction of S1 (e.g., 1%), simple set`--subset 0.01`
 
-For Human3.6M:
+If you want to reproduce the results of our pretrained models on Human3.6M, run the following commands.
+```shell
+cd ../
+
+# with ground-truth 3D pose supervision on S1 and weak supervision on S5,S6,S7,S8 (without ground-truth)
+python run_pr.py -k gt --subjects-train S1 --subjects-unlabeled S5,S6,S7,S8 -e 100 -lrd 0.99 -dfq 500 -arc 3,3,3 --warmup 2 -b 256 -wsb 128 -no-mble -pto -bse -bpc -jmc -mce-t -2.1 -semi-sup-coef 2.,0.,.1333,.1333,.0667,.0667,.1,.03 -mcv 4 -mce-ta --save-model
+
+# OR
+python run_pr.py -k hr --train-with-est2d --ws-with-est2d --test-with-est2d --subjects-train S1 --subjects-unlabeled S5,S6,S7,S8 -e 100 -lrd 0.99 --warmup 2 -b 256 -no-mble -pto -bse -bpc -jmc -mce-t -2.1 -semi-sup-coef 2.,0.,.1333,.1333,.0667,.0667,.1,.03 -mce-ta
 ```
-python run.py -e 80 -k cpn_ft_h36m_dbb -arc 3,3,3,3,3
-```
-By default the application runs in training mode. This will train a new model for 80 epochs, using fine-tuned CPN detections. Expect a training time of 24 hours on a high-end Pascal GPU. If you feel that this is too much, or your GPU is not powerful enough, you can train a model with a smaller receptive field, e.g.
-- `-arc 3,3,3,3` (81 frames) should require 11 hours and achieve 47.7 mm. 
-- `-arc 3,3,3` (27 frames) should require 6 hours and achieve 48.8 mm.
-
-You could also lower the number of epochs from 80 to 60 with a negligible impact on the result.
+By default the application runs in training mode. 
+- 1st will train and evaluate a new model for 100 epochs, using GT 2D poses. Which should give an error around 42.2 mm MPJPE. By contrast, 49.7 mm MPJPE if we only train supervised
+- 2nd will train and evaluate a new model for 100 epochs, using 2D poses from pretrained Deep-HRNet detector. Which should give an error around 52.4 mm MPJPE.
 
 
 ### Semi-supervised training without camera parameters
-To perform semi-supervised training, you just need to add the `--subjects-unlabeled` argument. In the example below, we use ground-truth 2D poses as input, and train supervised on just 10% of Subject 1 (specified by `--subset 0.1`). The remaining subjects are treated as unlabeled data and are used for semi-supervision.
-```
-python run.py -k gt --subjects-train S1 --subset 0.1 --subjects-unlabeled S5,S6,S7,S8 -e 200 -lrd 0.98 -arc 3,3,3 --warmup 5 -b 64
-```
-This should give you an error around 65.2 mm. By contrast, if we only train supervised
 
+```shell
+python run_pr.py -k gt --subjects-train S1 --subjects-unlabeled S5,S6,S7,S8 -e 160 -lrd 0.975 -arc 1,1,1 --warmup 4 -b 512 -wsb 510 -proj-t -2 -no-mble -pto -bse -bpc -jmc -mce-t -2 -semi-sup-coef .125,0.,.025,.0125,.0125,.0125,0.,.03 -mcv 3 --save-model
+```
+This should give you an error around 54.2 mm MPJPE.
 
 
 ## License
