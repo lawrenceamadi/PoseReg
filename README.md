@@ -74,8 +74,8 @@ python visuals.py S1 0 0
 python visuals.py S1.S5.S6 0 1
 ```
 #### Bone Proportion Constraint (BPC) biomechanical regularizer derived from S1 pose data
+[//]: # (<p align="center"><img src="images/s1_perprp_likli.png" width="80" alt=""/></p>)
 ![Likelihood of Bone Ratios](./images/s1_perprp_likli.png)
-<p align="center"><img src="images/s1_perprp_likli.png" width="80" alt=""/></p>
 
 #### Joint Mobility Constraint (JMC) biomechanical regularizer derived from S1 pose data
 [//]: # (<p align="center"><img src="images/s1_perjnt_logli.gif" width="100%" alt=""/></p>)
